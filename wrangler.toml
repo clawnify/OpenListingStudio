@@ -1,0 +1,13 @@
+name = "open-listing-studio"
+main = "src/server/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "open-listing-studio-db"
+database_id = "local"
+
+[[r2_buckets]]
+binding = "UPLOADS"
+bucket_name = "open-listing-studio-uploads"

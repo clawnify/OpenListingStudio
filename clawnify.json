@@ -1,0 +1,15 @@
+{
+  "$schema": "https://app.clawnify.com/schema/v1/clawnify.json",
+  "name": "Open Listing Studio",
+  "description": "AI listing-content studio for e-commerce sellers (Amazon-first). Brand kits, a product library with review ingestion, and a review-grounded Launch workflow that generates listing copy, a product image stack, and A+ content modules — plus directed-edit image tools. Runs on your own model keys. An open-source alternative to credit-based listing SaaS like Scalable.",
+  "app": {
+    "framework": "react+hono",
+    "database": true,
+    "storage": true
+  },
+  "credentials": ["serpapi"],
+  "env": {
+    "required": ["OPENROUTER_API_KEY"],
+    "optional": ["FAL_API_KEY", "SERPAPI_API_KEY", "LISTING_MODEL"]
+  }
+}
