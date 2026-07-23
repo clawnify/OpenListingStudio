@@ -2,7 +2,7 @@ import { createApp, createRoute, z } from "@clawnify/app";
 import { query, get, run } from "./db.js";
 import { initUploads, putUpload, getUpload, deleteUpload, rid } from "./uploads.js";
 import { TOOLS, getTool, publicTool } from "./tools.js";
-import { routeImage, analyzeImage } from "./image.js";
+import { routeImage, analyzeImage, hasAlphaChannel } from "./image.js";
 import { splitReviews, type AiEnv } from "./ai.js";
 import { validateListingCopy, type ListingCopy } from "./amazon-limits.js";
 import { getTemplate, MAIN_IMAGE_TEMPLATE_ID } from "./templates.js";
@@ -246,13 +246,69 @@ app.post("/api/products/:id/photos", async (c) => {
   const roleRaw = form.get("role");
   const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
   const key = `${rid("up")}.${ext}`;
-  await putUpload(key, await file.arrayBuffer(), file.type || "image/png");
+  const buf = await file.arrayBuffer();
+  await putUpload(key, buf, file.type || "image/png");
   const photos = parsePhotos(product.image_r2_keys);
   const role: PhotoRole =
     roleRaw === "main" || roleRaw === "angle" || roleRaw === "detail" ? roleRaw : photos.length === 0 ? "main" : "angle";
-  photos.push({ r2_key: key, role });
+  // A transparent packshot is its own cutout — templates composite it as-is.
+  const selfCutout = hasAlphaChannel(new Uint8Array(buf));
+  photos.push({ r2_key: key, role, ...(selfCutout ? { cutout_r2_key: key } : {}) });
   await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), id]);
   return c.json({ key, url: `/api/uploads/${key}`, photos }, 201);
+});
+
+/**
+ * Upload your own transparent cutout for a photo (professional packshots).
+ * Multipart: `file` + `r2_key` of the photo it belongs to. The file MUST
+ * carry a real alpha channel — a white-matte JPEG can't silently become the
+ * "cutout". Replaces (and deletes) any previous generated cutout.
+ */
+app.put("/api/products/:id/photos/cutout", async (c) => {
+  const id = c.req.param("id");
+  const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [id]);
+  if (!product) return c.json({ error: "Not found" }, 404);
+  const form = await c.req.formData();
+  const file = form.get("file");
+  const r2_key = form.get("r2_key");
+  if (!(file instanceof File) || typeof r2_key !== "string" || !r2_key) {
+    return c.json({ error: "file and r2_key are required" }, 400);
+  }
+  const photos = parsePhotos(product.image_r2_keys);
+  const photo = photos.find((p) => p.r2_key === r2_key);
+  if (!photo) return c.json({ error: "Photo not found on this product" }, 404);
+  const buf = await file.arrayBuffer();
+  if (!hasAlphaChannel(new Uint8Array(buf))) {
+    return c.json({ error: "That file has no alpha channel — export a transparent PNG (or WebP) and retry" }, 400);
+  }
+  const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
+  const cutoutKey = `${rid("cut")}.${ext}`;
+  await putUpload(cutoutKey, buf, file.type || "image/png");
+  if (photo.cutout_r2_key && photo.cutout_r2_key !== photo.r2_key) await deleteUpload(photo.cutout_r2_key).catch(() => {});
+  const next = photos.map((p) => (p.r2_key === r2_key ? { ...p, cutout_r2_key: cutoutKey } : p));
+  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(next), id]);
+  return c.json({ ok: true, cutout_r2_key: cutoutKey, photos: next });
+});
+
+/** Regenerate a photo's cutout via BiRefNet (replaces + deletes the old one). */
+app.post("/api/products/:id/photos/cutout", async (c) => {
+  const id = c.req.param("id");
+  const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [id]);
+  if (!product) return c.json({ error: "Not found" }, 404);
+  if (!c.env.FAL_API_KEY) return c.json({ error: "Cutout generation needs FAL_API_KEY set in the app environment" }, 503);
+  const b = await c.req.json<{ r2_key?: string }>().catch(() => ({}) as { r2_key?: string });
+  if (!b.r2_key) return c.json({ error: "r2_key is required" }, 400);
+  const photos = parsePhotos(product.image_r2_keys);
+  const photo = photos.find((p) => p.r2_key === b.r2_key);
+  if (!photo) return c.json({ error: "Photo not found on this product" }, 404);
+  const { url } = await routeImage(c.env, { op: "remove_bg", imageUrl: `/api/uploads/${photo.r2_key}`, prompt: "" });
+  const cutoutKey = url.replace("/api/uploads/", "");
+  if (photo.cutout_r2_key && photo.cutout_r2_key !== photo.r2_key && photo.cutout_r2_key !== cutoutKey) {
+    await deleteUpload(photo.cutout_r2_key).catch(() => {});
+  }
+  const next = photos.map((p) => (p.r2_key === b.r2_key ? { ...p, cutout_r2_key: cutoutKey } : p));
+  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(next), id]);
+  return c.json({ ok: true, cutout_r2_key: cutoutKey, photos: next });
 });
 
 // Remove a product photo — drops the entry AND deletes the R2 object.

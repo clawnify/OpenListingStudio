@@ -125,6 +125,46 @@ export async function editImage(
   throw lastError || new Error("Image edit failed after retries");
 }
 
+// ── Alpha detection ──────────────────────────────────────────────────
+
+/**
+ * True when the image bytes carry a REAL alpha channel:
+ *   PNG  — color type 6 (RGBA) or 4 (gray+alpha), or a tRNS chunk on
+ *          palette/grayscale/truecolor images.
+ *   WebP — VP8X alpha flag, or the VP8L lossless alpha bit.
+ * Everything else (JPEG, opaque PNG/WebP) → false. Used to validate uploaded
+ * cutouts and to skip BiRefNet when the source is already transparent.
+ */
+export function hasAlphaChannel(bytes: Uint8Array): boolean {
+  // PNG: 89 50 4E 47 0D 0A 1A 0A
+  if (bytes.length > 33 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    const colorType = bytes[25];
+    if (colorType === 4 || colorType === 6) return true;
+    // Scan chunks for tRNS (transparency on palette/opaque color types).
+    let off = 8;
+    while (off + 8 <= bytes.length) {
+      const len = (bytes[off] << 24) | (bytes[off + 1] << 16) | (bytes[off + 2] << 8) | bytes[off + 3];
+      const type = String.fromCharCode(bytes[off + 4], bytes[off + 5], bytes[off + 6], bytes[off + 7]);
+      if (type === "tRNS") return true;
+      if (type === "IDAT" || type === "IEND") break; // tRNS must precede IDAT
+      off += 12 + len;
+    }
+    return false;
+  }
+  // WebP: RIFF....WEBP
+  if (
+    bytes.length > 30 &&
+    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
+    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
+  ) {
+    const fourcc = String.fromCharCode(bytes[12], bytes[13], bytes[14], bytes[15]);
+    if (fourcc === "VP8X") return (bytes[20] & 0x10) !== 0; // extended header alpha flag
+    if (fourcc === "VP8L") return (bytes[24] & 0x10) !== 0; // lossless alpha bit
+    return false; // plain VP8 (lossy) has no alpha
+  }
+  return false;
+}
+
 // ── Dispatchers (open-studio pattern: provider routing lives in ONE place) ──
 
 /**

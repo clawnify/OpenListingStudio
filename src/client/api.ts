@@ -267,6 +267,16 @@ export const api = {
   },
   deletePhoto: (productId: string, r2_key: string) =>
     fetch(`/api/products/${productId}/photos`, { ...j({ r2_key }), method: "DELETE" }).then(json<{ ok: true; photos: PhotoRef[] }>),
+  regenerateCutout: (productId: string, r2_key: string) =>
+    fetch(`/api/products/${productId}/photos/cutout`, { ...j({ r2_key }), method: "POST" }).then(
+      json<{ ok: true; cutout_r2_key: string; photos: PhotoRef[] }>,
+    ),
+  async uploadCutout(productId: string, r2_key: string, file: File): Promise<{ ok: true; cutout_r2_key: string; photos: PhotoRef[] }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("r2_key", r2_key);
+    return json(await fetch(`/api/products/${productId}/photos/cutout`, { method: "PUT", body: fd }));
+  },
   setPhotoRole: (productId: string, r2_key: string, role: PhotoRole) =>
     fetch(`/api/products/${productId}/photos`, { ...j({ r2_key, role }), method: "PUT" }).then(json<{ ok: true; photos: PhotoRef[] }>),
 

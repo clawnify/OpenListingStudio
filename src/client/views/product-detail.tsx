@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Upload, Rocket, Star, Trash2, FileUp, Globe, ClipboardPaste, X } from "lucide-react";
+import { ArrowLeft, Upload, Rocket, Star, Trash2, FileUp, Globe, ClipboardPaste, X, Scissors, Loader2 } from "lucide-react";
 import { api, parseJson, parsePhotos, type Product, type BrandKit, type Review, type Launch, type LaunchConfig, type Health, type PhotoRef, type PhotoRole } from "../api";
 import { Card, Zone, Eyebrow, Chip, PrimaryButton, SecondaryButton, Field, TextInput, TextArea, EmptyState, statusBadge } from "../ui";
 
@@ -23,6 +23,10 @@ export function ProductDetailView() {
   const [featuresText, setFeaturesText] = useState("");
   const csvRef = useRef<HTMLInputElement>(null);
   const photoRef = useRef<HTMLInputElement>(null);
+  const cutoutRef = useRef<HTMLInputElement>(null);
+  const [cutoutBusy, setCutoutBusy] = useState<string | null>(null);
+  /** Per-photo flip: show the transparent cutout instead of the raw photo. */
+  const [showCutout, setShowCutout] = useState<Record<string, boolean>>({});
 
   const reload = () => {
     api.getProduct(id).then((p) => {
@@ -56,6 +60,34 @@ export function ProductDetailView() {
       applyPhotos(next);
     } catch {
       reload();
+    }
+  }
+
+  async function regenCutout(photo: PhotoRef) {
+    setCutoutBusy(photo.r2_key);
+    setMsg(null);
+    try {
+      const { photos: next } = await api.regenerateCutout(id, photo.r2_key);
+      applyPhotos(next);
+      setShowCutout((s) => ({ ...s, [photo.r2_key]: true }));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCutoutBusy(null);
+    }
+  }
+
+  async function uploadOwnCutout(photo: PhotoRef, file: File) {
+    setCutoutBusy(photo.r2_key);
+    setMsg(null);
+    try {
+      const { photos: next } = await api.uploadCutout(id, photo.r2_key, file);
+      applyPhotos(next);
+      setShowCutout((s) => ({ ...s, [photo.r2_key]: true }));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCutoutBusy(null);
     }
   }
 
@@ -326,33 +358,90 @@ export function ProductDetailView() {
                     }
                   }}
                 />
+                <input
+                  ref={cutoutRef}
+                  type="file"
+                  accept="image/png,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const key = cutoutRef.current?.getAttribute("data-photo");
+                    const photo = photos.find((x) => x.r2_key === key);
+                    const f = e.target.files?.[0];
+                    if (photo && f) uploadOwnCutout(photo, f);
+                    e.target.value = "";
+                  }}
+                />
               </div>
               {photos.length === 0 ? (
                 <EmptyState>No photos yet. The `main` photo drives the image stack and the directed-edit tools.</EmptyState>
               ) : (
                 <div className="grid grid-cols-3 gap-2 mt-1">
-                  {photos.map((p) => (
-                    <div
-                      key={p.r2_key}
-                      className={`group relative aspect-square rounded-md overflow-hidden border ${p.role === "main" ? "border-primary" : "border-border"}`}
-                    >
-                      <img src={`/api/uploads/${p.r2_key}`} className="size-full object-cover" />
-                      <button
-                        className="absolute bottom-1 left-1 rounded bg-surface/90 px-1.5 text-[10px] font-semibold hover:bg-surface"
-                        title="Click to change role (main → angle → detail)"
-                        onClick={() => cycleRole(p)}
+                  {photos.map((p) => {
+                    const flipped = !!p.cutout_r2_key && !!showCutout[p.r2_key];
+                    const busy = cutoutBusy === p.r2_key;
+                    return (
+                      <div
+                        key={p.r2_key}
+                        className={`group relative aspect-square rounded-md overflow-hidden border ${p.role === "main" ? "border-primary" : "border-border"}`}
+                        // checkerboard behind the cutout so the alpha is visible
+                        style={flipped ? { background: "repeating-conic-gradient(#e8ecf1 0% 25%, #ffffff 0% 50%) 0 0 / 14px 14px" } : undefined}
                       >
-                        {p.role}
-                      </button>
-                      <button
-                        className="absolute top-1 right-1 size-5 rounded-full bg-surface/90 text-muted hover:text-danger hover:bg-surface items-center justify-center hidden group-hover:flex"
-                        title="Remove photo"
-                        onClick={() => removePhoto(p.r2_key)}
-                      >
-                        <X size={12} strokeWidth={2.5} />
-                      </button>
-                    </div>
-                  ))}
+                        <img
+                          src={`/api/uploads/${flipped ? p.cutout_r2_key : p.r2_key}`}
+                          className={`size-full ${flipped ? "object-contain" : "object-cover"}`}
+                        />
+                        {busy && (
+                          <div className="absolute inset-0 bg-black/30 flex items-center justify-center">
+                            <Loader2 size={16} className="animate-spin text-white" />
+                          </div>
+                        )}
+                        <button
+                          className="absolute bottom-1 left-1 rounded bg-surface/90 px-1.5 text-[10px] font-semibold hover:bg-surface"
+                          title="Click to change role (main → angle → detail)"
+                          onClick={() => cycleRole(p)}
+                        >
+                          {p.role}
+                        </button>
+                        {p.cutout_r2_key && (
+                          <button
+                            className={`absolute bottom-1 right-1 rounded px-1.5 text-[10px] font-semibold ${flipped ? "bg-primary text-white" : "bg-surface/90 hover:bg-surface"}`}
+                            title={flipped ? "Show the original photo" : "Show the transparent cutout templates composite"}
+                            onClick={() => setShowCutout((s) => ({ ...s, [p.r2_key]: !s[p.r2_key] }))}
+                          >
+                            cutout
+                          </button>
+                        )}
+                        <div className="absolute top-1 left-1 hidden group-hover:flex gap-1">
+                          <button
+                            className="size-5 rounded-full bg-surface/90 text-muted hover:text-foreground hover:bg-surface flex items-center justify-center"
+                            title={health?.fal ? "Regenerate cutout (BiRefNet)" : "Regenerate cutout — needs FAL_API_KEY"}
+                            disabled={busy || !health?.fal}
+                            onClick={() => regenCutout(p)}
+                          >
+                            <Scissors size={11} />
+                          </button>
+                          <button
+                            className="size-5 rounded-full bg-surface/90 text-muted hover:text-foreground hover:bg-surface flex items-center justify-center"
+                            title="Upload your own transparent cutout (PNG with alpha)"
+                            disabled={busy}
+                            onClick={() => {
+                              cutoutRef.current?.setAttribute("data-photo", p.r2_key);
+                              cutoutRef.current?.click();
+                            }}
+                          >
+                            <Upload size={11} />
+                          </button>
+                        </div>
+                        <button
+                          className="absolute top-1 right-1 size-5 rounded-full bg-surface/90 text-muted hover:text-danger hover:bg-surface items-center justify-center hidden group-hover:flex"
+                          title="Remove photo"
+                          onClick={() => removePhoto(p.r2_key)}
+                        >
+                          <X size={12} strokeWidth={2.5} />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </Zone>

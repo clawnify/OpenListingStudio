@@ -26,3 +26,4 @@ AI listing-content studio for e-commerce sellers (Amazon-first). Brand kits + pr
 - Listing copy is validated against Amazon limits: title ≤200 chars, exactly 5 bullets ≤250 chars, description ≤2000 chars, backend keywords ≤249 bytes.
 - Reviews in: `POST /api/products/{id}/reviews/paste` `{text}` (verbatim AI split), `.../reviews/csv` (multipart file), `.../reviews/import-live` (needs SERPAPI_API_KEY).
 - Product photos: `POST /api/products/{id}/photos` (multipart, optional `role`), `PUT`/`DELETE` same path with `{r2_key, role?}`. The `main`-role photo drives generations.
+- Cutouts (transparent product for template compositing, cached as `cutout_r2_key` on the photo): auto-generated via BiRefNet on first templated render (FAL key), or a source upload with real alpha is its own cutout. `POST /api/products/{id}/photos/cutout` `{r2_key}` regenerates; `PUT` same path (multipart `file` + `r2_key`) sets your own — rejected unless the file truly has an alpha channel.

@@ -16,8 +16,8 @@ import { query, get, run } from "./db.js";
 import { extractInsights, generateListingCopy, type AiEnv, type LaunchInsights } from "./ai.js";
 import type { ListingCopy } from "./amazon-limits.js";
 import { TEMPLATES, MAIN_IMAGE_TEMPLATE_ID, DEFAULT_BRAND, PLACEHOLDER_PHOTO, type BrandStyle, type TemplateCtx } from "./templates.js";
-import { readUploadAsBase64DataUrl } from "./uploads.js";
-import { removeBackground } from "./image.js";
+import { readUploadAsBase64DataUrl, getUpload } from "./uploads.js";
+import { removeBackground, hasAlphaChannel } from "./image.js";
 
 // ── Row types ────────────────────────────────────────────────────────
 
@@ -247,15 +247,28 @@ export async function templatePhotoDataUri(
     if (cached) return cached;
   }
 
+  const persistCutout = async (cutoutKey: string) => {
+    const photos = parsePhotos(p.image_r2_keys).map((x) =>
+      x.r2_key === photo.r2_key ? { ...x, cutout_r2_key: cutoutKey } : x,
+    );
+    await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), p.id]);
+  };
+
+  // A source that already carries real alpha (a transparent packshot uploaded
+  // as the product photo) IS its own cutout — never spend a fal call on it.
+  const rawObj = await getUpload(photo.r2_key);
+  if (rawObj && hasAlphaChannel(new Uint8Array(rawObj.data))) {
+    await persistCutout(photo.r2_key);
+    const uri = await readUploadAsBase64DataUrl(photo.r2_key);
+    if (uri) return uri;
+  }
+
   if (env?.FAL_API_KEY) {
     try {
       const { url } = await removeBackground(env, { imageUrl: `/api/uploads/${photo.r2_key}` });
       const cutoutKey = url.replace("/api/uploads/", "");
       // Persist the cutout on the photo entry so the next render reuses it.
-      const photos = parsePhotos(p.image_r2_keys).map((x) =>
-        x.r2_key === photo.r2_key ? { ...x, cutout_r2_key: cutoutKey } : x,
-      );
-      await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), p.id]);
+      await persistCutout(cutoutKey);
       const uri = await readUploadAsBase64DataUrl(cutoutKey);
       if (uri) return uri;
     } catch {
