@@ -16,9 +16,10 @@ export type ImageEnv = {
 };
 
 // Gemini image models on OpenRouter. Default is the fast one; the Pro model
-// is a drop-in for hero shots when quality matters more.
-export const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image-preview";
-export const PRO_IMAGE_MODEL = "google/gemini-3-pro-image-preview";
+// is a drop-in for hero shots when quality matters more. (The `-preview`
+// variants 404 at the provider since the GA models shipped — verified live.)
+export const DEFAULT_IMAGE_MODEL = "google/gemini-3.1-flash-image";
+export const PRO_IMAGE_MODEL = "google/gemini-3-pro-image";
 
 function looksLikeHtml(s: string): boolean {
   return /<!doctype html>|<html\b/i.test(s.slice(0, 200));

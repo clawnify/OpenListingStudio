@@ -1,0 +1,18 @@
+# Local dev secrets (git-ignored). When deployed on Clawnify these are
+# injected by the platform from your org's API Keys / Integrations settings.
+
+# Required — copy + insight generation and Gemini image edits (OpenRouter)
+OPENROUTER_API_KEY=
+
+# Optional — true upscaling via fal.ai (upscale tool falls back to a model pass)
+# FAL_API_KEY=
+
+# Optional — live Amazon review import via SerpAPI's Amazon engines
+# SERPAPI_API_KEY=
+
+# Managed screenshot render (image-stack templates). Injected automatically on
+# Clawnify; only needed locally if you want live PNG renders.
+# CLAWNIFY_TOKEN=
+
+# Optional — override the text model (default anthropic/claude-sonnet-4)
+# LISTING_MODEL=
