@@ -476,8 +476,10 @@ export function LaunchDetailView() {
       </header>
 
       <div className="p-6 grid gap-5 xl:grid-cols-[340px_1fr] max-w-[1500px]">
-        {/* Left rail: workflow timeline + compare */}
-        <div className="space-y-5 self-start">
+        {/* Left rail: workflow timeline + compare — sticky beneath the 56px
+            header so progress stays in view while the long content column
+            scrolls; scrolls internally if taller than the viewport. */}
+        <div className="space-y-5 self-start xl:sticky xl:top-[72px] xl:max-h-[calc(100vh-88px)] xl:overflow-y-auto">
           <Card>
             <Zone first>
               <Eyebrow>Agentic workflow</Eyebrow>
