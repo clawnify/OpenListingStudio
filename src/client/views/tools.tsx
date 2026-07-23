@@ -4,6 +4,7 @@ import {
   Sofa,
   Replace,
   ListChecks,
+  Scissors,
   Sparkles,
   Upload,
   Loader2,
@@ -12,13 +13,14 @@ import {
   CornerUpLeft,
   type LucideIcon,
 } from "lucide-react";
-import { api, assetUrl, parsePhotos, type Tool, type Asset, type Product } from "../api";
+import { api, assetUrl, parsePhotos, type Tool, type Asset, type Product, type Health } from "../api";
 
 const ICONS: Record<string, LucideIcon> = {
   square: Square,
   sofa: Sofa,
   replace: Replace,
   "list-checks": ListChecks,
+  scissors: Scissors,
   sparkles: Sparkles,
 };
 
@@ -33,6 +35,7 @@ type Selected = { url: string; label: string; sub?: string; disclaimer?: string 
 
 export function ToolsView() {
   const [tools, setTools] = useState<Tool[]>([]);
+  const [health, setHealth] = useState<Health | null>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [productId, setProductId] = useState("");
   const [source, setSource] = useState<string | null>(null);
@@ -46,6 +49,7 @@ export function ToolsView() {
   useEffect(() => {
     api.listTools().then(setTools).catch(() => {});
     api.listProducts().then(setProducts).catch(() => {});
+    api.health().then(setHealth).catch(() => {});
   }, []);
 
   const grouped = useMemo(
@@ -217,17 +221,21 @@ export function ToolsView() {
               <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{CATEGORY_LABEL[cat]}</div>
               {items.map((tool) => {
                 const Icon = ICONS[tool.icon] ?? Sparkles;
+                const needsFal = !!tool.requiresFal && health !== null && !health.fal;
                 return (
                   <button
                     key={tool.id}
-                    disabled={!selected}
+                    disabled={!selected || needsFal}
                     onClick={() => openTool(tool)}
-                    title={tool.description}
+                    title={needsFal ? "Requires FAL_API_KEY — set it in the app environment" : tool.description}
                     className="w-full flex items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-sunken disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Icon size={18} className="text-primary mt-0.5 shrink-0" />
                     <span className="min-w-0">
-                      <span className="block text-sm font-medium">{tool.label}</span>
+                      <span className="block text-sm font-medium">
+                        {tool.label}
+                        {needsFal && <span className="ml-1.5 text-[10px] text-faint font-normal">needs FAL key</span>}
+                      </span>
                       <span className="block text-[11px] text-muted line-clamp-1">{tool.description}</span>
                     </span>
                   </button>

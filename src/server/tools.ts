@@ -33,6 +33,8 @@ export type ToolDef = {
   buildPrompt: (params: Record<string, string>) => string;
   /** Honesty note returned with the result where AI edits could mislead. */
   disclaimer?: string;
+  /** Tool is unavailable without FAL_API_KEY (no model fallback exists). */
+  requiresFal?: boolean;
 };
 
 /** Prepended to every edit so the model treats the product as ground truth. */
@@ -117,6 +119,19 @@ export const TOOLS: ToolDef[] = [
       return `${KEEP_PRODUCT} Turn this into a professional e-commerce infographic image: keep the product photo as the centerpiece and overlay clean, modern graphic design — a bold headline reading "${p.headline}" and ${callouts.length} short feature callouts with thin pointer lines to the relevant part of the product: ${callouts.map((c) => `"${c}"`).join(", ")}. Flat design, generous whitespace, legible sans-serif type${p.accent ? `, accent color ${p.accent}` : ""}. Text must be spelled exactly as given.`;
     },
     disclaimer: CLAIM_DISCLAIMER,
+  },
+  {
+    id: "remove_background",
+    label: "Remove Background",
+    category: "listing",
+    icon: "scissors",
+    description:
+      "Cut the product out to a transparent PNG (BiRefNet matting) — clean compositing on any backdrop, no white box.",
+    inputs: [],
+    // True alpha matting, not a generative edit — the prompt is unused; the
+    // dispatcher routes this straight to fal BiRefNet.
+    buildPrompt: () => "",
+    requiresFal: true,
   },
   {
     id: "upscale",

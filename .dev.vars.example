@@ -4,7 +4,9 @@
 # Required — copy + insight generation and Gemini image edits (OpenRouter)
 OPENROUTER_API_KEY=
 
-# Optional — true upscaling via fal.ai (upscale tool falls back to a model pass)
+# Optional — fal.ai: true upscaling (SeedVR) + background removal / template
+# cutout compositing (BiRefNet). Without it, upscale falls back to a model
+# pass and templates composite the raw photo.
 # FAL_API_KEY=
 
 # Optional — live Amazon review import via SerpAPI's Amazon engines

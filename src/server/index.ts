@@ -269,6 +269,8 @@ app.delete("/api/products/:id/photos", async (c) => {
   if (remaining.length && !remaining.some((p) => p.role === "main")) remaining[0].role = "main";
   await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(remaining), id]);
   await deleteUpload(b.r2_key).catch(() => {});
+  const removed = photos.find((p) => p.r2_key === b.r2_key);
+  if (removed?.cutout_r2_key) await deleteUpload(removed.cutout_r2_key).catch(() => {});
   return c.json({ ok: true, photos: remaining });
 });
 
@@ -487,7 +489,8 @@ async function renderAsset(env: Bindings, asset: AssetRow): Promise<AssetRow> {
       if (!asset.launch_id) throw new Error("Template assets belong to a launch");
       const launch = await get<LaunchRow>("SELECT * FROM launches WHERE id=?", [asset.launch_id]);
       if (!launch) throw new Error("Launch not found");
-      const ctx = await buildTemplateCtx(launch);
+      // env in → generates/caches the BiRefNet cutout for clean compositing.
+      const ctx = await buildTemplateCtx(launch, env);
       if (!ctx) throw new Error("Product not found for launch");
       const html = tmpl.buildHTML(ctx);
       const bytes = await renderStatic({
@@ -606,7 +609,7 @@ async function runTool(
   try {
     const prompt = tool.buildPrompt(input.params || {});
     const { url } = await routeImage(env, {
-      op: tool.id === "upscale" ? "upscale" : "edit",
+      op: tool.id === "upscale" ? "upscale" : tool.id === "remove_background" ? "remove_bg" : "edit",
       imageUrl: input.source_image_url,
       prompt,
     });

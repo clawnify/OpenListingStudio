@@ -131,14 +131,20 @@ export async function editImage(
  * Single image-operation dispatcher shared by the UI tool route, the agent v1
  * route, and the launch main-image render — so provider branching (fal vs
  * OpenRouter, key checks, fallbacks) is written exactly once.
- *   op "edit"    → OpenRouter Gemini image edit (reference images in).
- *   op "upscale" → fal.ai SeedVR when FAL_API_KEY is set, else a Gemini
- *                  enhance pass so the tool still works OpenRouter-only.
+ *   op "edit"       → OpenRouter Gemini image edit (reference images in).
+ *   op "upscale"    → fal.ai SeedVR when FAL_API_KEY is set, else a Gemini
+ *                     enhance pass so the tool still works OpenRouter-only.
+ *   op "remove_bg"  → fal.ai BiRefNet v2 (true alpha matting). No model
+ *                     fallback — a generative "edit" can't produce real
+ *                     transparency, so this op requires FAL_API_KEY.
  */
 export async function routeImage(
   env: ImageEnv,
-  params: { op: "edit" | "upscale"; imageUrl: string; prompt: string; model?: string; extraImages?: string[] },
+  params: { op: "edit" | "upscale" | "remove_bg"; imageUrl: string; prompt: string; model?: string; extraImages?: string[] },
 ): Promise<{ url: string }> {
+  if (params.op === "remove_bg") {
+    return removeBackground(env, { imageUrl: params.imageUrl });
+  }
   if (params.op === "upscale" && env.FAL_API_KEY) {
     return upscaleImage(env, { imageUrl: params.imageUrl });
   }
@@ -177,6 +183,34 @@ export async function analyzeImage(
   const text = data.choices?.[0]?.message?.content;
   if (!text) throw new Error("Vision model returned no content");
   return text;
+}
+
+/**
+ * Background removal via fal.ai BiRefNet v2 → transparent PNG, rehosted in R2.
+ * Contract (verified against fal's current v2 API page): POST
+ * https://fal.run/fal-ai/birefnet/v2 with { image_url, output_format,
+ * refine_foreground } → { image: { url } }. Requires FAL_API_KEY.
+ */
+export async function removeBackground(
+  env: ImageEnv,
+  opts: { imageUrl: string },
+): Promise<{ url: string }> {
+  if (!env.FAL_API_KEY) throw new Error("Background removal needs FAL_API_KEY set in the app environment");
+  const inputUrl = await resolveForProvider(opts.imageUrl);
+  const res = await fetchWith5xxRetry("https://fal.run/fal-ai/birefnet/v2", {
+    method: "POST",
+    headers: { Authorization: `Key ${env.FAL_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      image_url: inputUrl,
+      output_format: "png", // png keeps the alpha channel
+      refine_foreground: true, // cleaner product edges for compositing
+    }),
+  });
+  const rawText = await res.text();
+  if (!res.ok) throw new Error(`fal.ai birefnet ${summarizeUpstreamError(res.status, rawText)}`);
+  const data = JSON.parse(rawText) as { image?: { url: string } };
+  if (!data.image?.url) throw new Error("fal.ai birefnet response missing image url");
+  return { url: await rehost(data.image.url, "png", "image/png") };
 }
 
 /** Upscale via fal.ai SeedVR. Requires FAL_API_KEY. */

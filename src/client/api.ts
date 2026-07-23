@@ -169,6 +169,7 @@ export type Tool = {
   description: string;
   inputs: ToolInput[];
   disclaimer?: string;
+  requiresFal?: boolean;
 };
 
 export type Health = {
@@ -183,7 +184,7 @@ export function assetUrl(a: Asset): string | null {
 }
 
 export type PhotoRole = "main" | "angle" | "detail";
-export type PhotoRef = { r2_key: string; role: PhotoRole };
+export type PhotoRef = { r2_key: string; role: PhotoRole; cutout_r2_key?: string };
 
 /** Parse product.image_r2_keys, accepting both legacy string[] and PhotoRef[]. */
 export function parsePhotos(raw: string | null | undefined): PhotoRef[] {
@@ -192,8 +193,12 @@ export function parsePhotos(raw: string | null | undefined): PhotoRef[] {
     .map((x, i): PhotoRef | null => {
       if (typeof x === "string") return { r2_key: x, role: i === 0 ? "main" : "angle" };
       if (x && typeof x === "object" && typeof (x as PhotoRef).r2_key === "string") {
-        const role = (x as PhotoRef).role;
-        return { r2_key: (x as PhotoRef).r2_key, role: role === "angle" || role === "detail" ? role : "main" };
+        const p = x as PhotoRef;
+        return {
+          r2_key: p.r2_key,
+          role: p.role === "angle" || p.role === "detail" ? p.role : "main",
+          ...(p.cutout_r2_key ? { cutout_r2_key: p.cutout_r2_key } : {}),
+        };
       }
       return null;
     })

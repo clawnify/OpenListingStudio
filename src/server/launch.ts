@@ -17,6 +17,7 @@ import { extractInsights, generateListingCopy, type AiEnv, type LaunchInsights }
 import type { ListingCopy } from "./amazon-limits.js";
 import { TEMPLATES, MAIN_IMAGE_TEMPLATE_ID, DEFAULT_BRAND, PLACEHOLDER_PHOTO, type BrandStyle, type TemplateCtx } from "./templates.js";
 import { readUploadAsBase64DataUrl } from "./uploads.js";
+import { removeBackground } from "./image.js";
 
 // ── Row types ────────────────────────────────────────────────────────
 
@@ -189,6 +190,8 @@ export type PhotoRole = "main" | "angle" | "detail";
 export interface PhotoRef {
   r2_key: string;
   role: PhotoRole;
+  /** Cached transparent cutout (BiRefNet) of this photo, generated lazily. */
+  cutout_r2_key?: string;
 }
 
 /** Parse image_r2_keys, accepting both the legacy string[] and PhotoRef[] shapes. */
@@ -198,8 +201,12 @@ export function parsePhotos(raw: string | null | undefined): PhotoRef[] {
     .map((x, i): PhotoRef | null => {
       if (typeof x === "string") return { r2_key: x, role: i === 0 ? "main" : "angle" };
       if (x && typeof x === "object" && typeof (x as PhotoRef).r2_key === "string") {
-        const role = (x as PhotoRef).role;
-        return { r2_key: (x as PhotoRef).r2_key, role: role === "angle" || role === "detail" ? role : "main" };
+        const p = x as PhotoRef;
+        return {
+          r2_key: p.r2_key,
+          role: p.role === "angle" || p.role === "detail" ? p.role : "main",
+          ...(typeof p.cutout_r2_key === "string" && p.cutout_r2_key ? { cutout_r2_key: p.cutout_r2_key } : {}),
+        };
       }
       return null;
     })
@@ -221,7 +228,47 @@ export async function firstPhotoDataUri(p: ProductRow): Promise<string> {
   return PLACEHOLDER_PHOTO;
 }
 
-export async function buildTemplateCtx(launch: LaunchRow): Promise<TemplateCtx | null> {
+/**
+ * The photo templates composite: a transparent CUTOUT of the main photo so
+ * the product sits clean on any template background (no opaque white box).
+ * Generated lazily via BiRefNet on the first templated render when a FAL key
+ * is present, cached on the photo entry (cutout_r2_key), and reused after.
+ * Graceful fallback to the raw photo when there's no key or the cut fails.
+ */
+export async function templatePhotoDataUri(
+  p: ProductRow,
+  env?: { FAL_API_KEY?: string; OPENROUTER_API_KEY: string },
+): Promise<string> {
+  const photo = mainPhoto(p);
+  if (!photo) return PLACEHOLDER_PHOTO;
+
+  if (photo.cutout_r2_key) {
+    const cached = await readUploadAsBase64DataUrl(photo.cutout_r2_key);
+    if (cached) return cached;
+  }
+
+  if (env?.FAL_API_KEY) {
+    try {
+      const { url } = await removeBackground(env, { imageUrl: `/api/uploads/${photo.r2_key}` });
+      const cutoutKey = url.replace("/api/uploads/", "");
+      // Persist the cutout on the photo entry so the next render reuses it.
+      const photos = parsePhotos(p.image_r2_keys).map((x) =>
+        x.r2_key === photo.r2_key ? { ...x, cutout_r2_key: cutoutKey } : x,
+      );
+      await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), p.id]);
+      const uri = await readUploadAsBase64DataUrl(cutoutKey);
+      if (uri) return uri;
+    } catch {
+      /* fall through to the raw photo — compositing must never hard-fail on the cut */
+    }
+  }
+  return firstPhotoDataUri(p);
+}
+
+export async function buildTemplateCtx(
+  launch: LaunchRow,
+  env?: { FAL_API_KEY?: string; OPENROUTER_API_KEY: string },
+): Promise<TemplateCtx | null> {
   const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [launch.product_id]);
   if (!product) return null;
   const kit = product.brand_kit_id
@@ -232,7 +279,9 @@ export async function buildTemplateCtx(launch: LaunchRow): Promise<TemplateCtx |
     brand: brandStyle(kit ?? null),
     copy: parse<ListingCopy | null>(launch.listing_copy, null),
     insights: parse<LaunchInsights | null>(launch.insights, null),
-    photoDataUri: await firstPhotoDataUri(product),
+    // env present (a real render) → cutout path; absent (preview/QA context) →
+    // cached cutout or raw, never a fal call.
+    photoDataUri: await templatePhotoDataUri(product, env),
   };
 }
 

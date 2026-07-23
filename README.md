@@ -18,7 +18,8 @@
   1. **Insights** — pains, desires, objections, and customer vocabulary extracted from the reviews. Every supporting quote is **verified verbatim** against the stored review text server-side; with no reviews the insights fall back to an AI-estimated tier that is clearly labelled and never invents customer voice.
   2. **Listing copy** — title, exactly 5 bullets, description, and backend keywords, validated against Amazon's limits (title ≤ 200 chars, bullets ≤ 250 chars each, description ≤ 2000 chars, search terms ≤ 249 bytes). The editor shows live per-field counters and copy-to-clipboard.
   3. **Image stack** — a main-image concept (white-background hero edit of your real photo) + 3 branded feed images (1600×1600) + 3 A+ modules (hero 1464×600, feature grid 970×600, at-a-glance chart 970×600), all rendered from your brand kit's colors and fonts.
-- **Directed-edit tools** — white background, lifestyle scene, background swap, infographic overlay, and upscale. Preset edits that keep the product pixel-faithful and change only the one thing named. Available in the UI *and* to agents via the OpenAPI surface.
+- **Directed-edit tools** — white background, lifestyle scene, background swap, infographic overlay, background removal (BiRefNet → transparent PNG), and upscale. Preset edits that keep the product pixel-faithful and change only the one thing named. Available in the UI *and* to agents via the OpenAPI surface.
+- **Clean compositing** — with a FAL key set, templates composite a cached transparent cutout of your product photo (generated once per photo via BiRefNet) instead of the raw rectangle, so the product sits naturally on any template background. Falls back to the raw photo without a key.
 
 ## Agent-native
 
@@ -35,7 +36,7 @@ The tool registry is a single source of truth: the same definitions power the UI
 | Variable | Required | Purpose |
 |---|---|---|
 | `OPENROUTER_API_KEY` | ✅ | Copy + insight generation (default `anthropic/claude-sonnet-4`, override with `LISTING_MODEL`) and Gemini image edits |
-| `FAL_API_KEY` | optional | True upscaling via fal.ai (falls back to a model enhance pass) |
+| `FAL_API_KEY` | optional | fal.ai: true upscaling (SeedVR), background removal + template cutout compositing (BiRefNet) |
 | `SERPAPI_API_KEY` | optional | Live Amazon review import (SerpAPI Amazon engines) |
 
 Image-stack templates render HTML → PNG through the Clawnify managed screenshot service (`CLAWNIFY_TOKEN`, injected automatically when deployed on Clawnify).
