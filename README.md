@@ -1,11 +1,10 @@
-<!-- hero banner placeholder — generate with the readme-banner skill once a dashboard screenshot exists -->
 <p align="center">
   <img src="readme-banner.png" alt="Open Listing Studio" width="840" />
 </p>
 
 # Open Listing Studio
 
-**The open-source AI listing studio for e-commerce sellers.** Brand kits, a product library with review ingestion, and a review-grounded **Launch** workflow that generates Amazon-compliant listing copy, a branded product image stack, and A+ content modules — plus directed-edit image tools for product photos. Amazon-first, agent-native, and **BYOK**: it runs on your own model keys, with no credits, no seats, and no lock-in. An open-source alternative to credit-based listing SaaS like Scalable.
+**The open-source AI listing studio for e-commerce sellers.** Brand kits, a product library with review ingestion, and a review-grounded **Launch** workflow that generates Amazon-compliant listing copy, a branded product image stack, and A+ content modules — plus directed-edit image tools for product photos. Amazon-first, agent-native, and **BYOK**: it runs on your own model keys, with no credits, no seats, and no lock-in. An open-source alternative to credit-based listing SaaS like Scalable — provided by [Clawnify.com](https://clawnify.com).
 
 ## What it does
 
@@ -47,10 +46,10 @@ Image-stack templates render HTML → PNG through the Clawnify managed screensho
 nvm use 22
 pnpm install
 cp .dev.vars.example .dev.vars   # add your keys
-pnpm dev                          # vite on :5173, worker on :8787
+pnpm dev                          # UI on :5173, API on :8787
 ```
 
-The stack: React 19 + Tailwind v4 client, Hono worker, D1 (SQLite) database, R2 storage.
+The stack: React 19 + Tailwind v4 client, Hono API, SQLite database, object storage.
 
 ## Deploy with Clawnify
 

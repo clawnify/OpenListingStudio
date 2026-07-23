@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#6D4CFF"/>
+  <!-- price-tag glyph -->
+  <g transform="rotate(45 256 256)">
+    <path d="M256 116 L356 116 Q380 116 380 140 L380 240 Q380 252 371.5 260.5 L268.5 363.5 Q256 376 243.5 363.5 L152.5 272.5 Q140 260 152.5 247.5 L247.5 124.5 Q252 116 256 116 Z"
+          fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linejoin="round"/>
+    <circle cx="332" cy="164" r="26" fill="#FFFFFF"/>
+  </g>
+</svg>
