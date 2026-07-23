@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
-import { ArrowLeft, Upload, Rocket, Star, Trash2, FileUp, Globe, ClipboardPaste } from "lucide-react";
-import { api, parseJson, type Product, type BrandKit, type Review, type Launch, type Health } from "../api";
+import { ArrowLeft, Upload, Rocket, Star, Trash2, FileUp, Globe, ClipboardPaste, X } from "lucide-react";
+import { api, parseJson, parsePhotos, type Product, type BrandKit, type Review, type Launch, type Health, type PhotoRef, type PhotoRole } from "../api";
 import { Card, Zone, Eyebrow, Chip, PrimaryButton, SecondaryButton, Field, TextInput, TextArea, EmptyState, statusBadge } from "../ui";
 
 export function ProductDetailView() {
@@ -40,7 +40,34 @@ export function ProductDetailView() {
 
   if (!product) return <div className="p-6 text-[13px] text-muted">Loading…</div>;
 
-  const photos = parseJson<string[]>(product.image_r2_keys, []);
+  const photos = parsePhotos(product.image_r2_keys);
+
+  function applyPhotos(next: PhotoRef[]) {
+    // Optimistic: patch the local product row without a refetch.
+    setProduct((p) => (p ? { ...p, image_r2_keys: JSON.stringify(next) } : p));
+  }
+
+  async function removePhoto(r2_key: string) {
+    applyPhotos(photos.filter((p) => p.r2_key !== r2_key));
+    try {
+      const { photos: next } = await api.deletePhoto(id, r2_key);
+      applyPhotos(next);
+    } catch {
+      reload();
+    }
+  }
+
+  const ROLE_CYCLE: PhotoRole[] = ["main", "angle", "detail"];
+  async function cycleRole(photo: PhotoRef) {
+    const next = ROLE_CYCLE[(ROLE_CYCLE.indexOf(photo.role) + 1) % ROLE_CYCLE.length];
+    applyPhotos(photos.map((p) => (p.r2_key === photo.r2_key ? { ...p, role: next } : next === "main" && p.role === "main" ? { ...p, role: "angle" } : p)));
+    try {
+      const { photos: fresh } = await api.setPhotoRole(id, photo.r2_key, next);
+      applyPhotos(fresh);
+    } catch {
+      reload();
+    }
+  }
 
   async function saveDetails(patch: Partial<{ name: string; category: string; asin: string | null; brand_kit_id: string; features: string[] }>) {
     const p = await api.updateProduct(id, patch);
@@ -298,13 +325,29 @@ export function ProductDetailView() {
                 />
               </div>
               {photos.length === 0 ? (
-                <EmptyState>No photos yet. The first photo drives the image stack and the directed-edit tools.</EmptyState>
+                <EmptyState>No photos yet. The `main` photo drives the image stack and the directed-edit tools.</EmptyState>
               ) : (
                 <div className="grid grid-cols-3 gap-2 mt-1">
-                  {photos.map((k, i) => (
-                    <div key={k} className={`relative aspect-square rounded-md overflow-hidden border ${i === 0 ? "border-primary" : "border-border"}`}>
-                      <img src={`/api/uploads/${k}`} className="size-full object-cover" />
-                      {i === 0 && <span className="absolute bottom-1 left-1 rounded bg-surface/90 px-1.5 text-[10px] font-semibold">main</span>}
+                  {photos.map((p) => (
+                    <div
+                      key={p.r2_key}
+                      className={`group relative aspect-square rounded-md overflow-hidden border ${p.role === "main" ? "border-primary" : "border-border"}`}
+                    >
+                      <img src={`/api/uploads/${p.r2_key}`} className="size-full object-cover" />
+                      <button
+                        className="absolute bottom-1 left-1 rounded bg-surface/90 px-1.5 text-[10px] font-semibold hover:bg-surface"
+                        title="Click to change role (main → angle → detail)"
+                        onClick={() => cycleRole(p)}
+                      >
+                        {p.role}
+                      </button>
+                      <button
+                        className="absolute top-1 right-1 size-5 rounded-full bg-surface/90 text-muted hover:text-danger hover:bg-surface items-center justify-center hidden group-hover:flex"
+                        title="Remove photo"
+                        onClick={() => removePhoto(p.r2_key)}
+                      >
+                        <X size={12} strokeWidth={2.5} />
+                      </button>
                     </div>
                   ))}
                 </div>

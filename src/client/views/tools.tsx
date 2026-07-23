@@ -12,7 +12,7 @@ import {
   CornerUpLeft,
   type LucideIcon,
 } from "lucide-react";
-import { api, assetUrl, parseJson, type Tool, type Asset, type Product } from "../api";
+import { api, assetUrl, parsePhotos, type Tool, type Asset, type Product } from "../api";
 
 const ICONS: Record<string, LucideIcon> = {
   square: Square,
@@ -67,9 +67,10 @@ export function ToolsView() {
   function useProductPhoto(id: string) {
     setProductId(id);
     const p = products.find((x) => x.id === id);
-    const keys = p ? parseJson<string[]>(p.image_r2_keys, []) : [];
-    if (keys.length) {
-      const url = `/api/uploads/${keys[0]}`;
+    const photos = p ? parsePhotos(p.image_r2_keys) : [];
+    const main = photos.find((x) => x.role === "main") ?? photos[0];
+    if (main) {
+      const url = `/api/uploads/${main.r2_key}`;
       setSource(url);
       setSelected({ url, label: p!.name });
     }

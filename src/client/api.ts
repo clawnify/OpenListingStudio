@@ -112,6 +112,24 @@ export function assetUrl(a: Asset): string | null {
   return a.r2_key ? `/api/uploads/${a.r2_key}` : null;
 }
 
+export type PhotoRole = "main" | "angle" | "detail";
+export type PhotoRef = { r2_key: string; role: PhotoRole };
+
+/** Parse product.image_r2_keys, accepting both legacy string[] and PhotoRef[]. */
+export function parsePhotos(raw: string | null | undefined): PhotoRef[] {
+  const arr = parseJson<unknown[]>(raw, []);
+  return arr
+    .map((x, i): PhotoRef | null => {
+      if (typeof x === "string") return { r2_key: x, role: i === 0 ? "main" : "angle" };
+      if (x && typeof x === "object" && typeof (x as PhotoRef).r2_key === "string") {
+        const role = (x as PhotoRef).role;
+        return { r2_key: (x as PhotoRef).r2_key, role: role === "angle" || role === "detail" ? role : "main" };
+      }
+      return null;
+    })
+    .filter((x): x is PhotoRef => x !== null);
+}
+
 export function parseJson<T>(s: string | null | undefined, fallback: T): T {
   if (!s) return fallback;
   try {
@@ -155,11 +173,16 @@ export const api = {
   updateProduct: (id: string, b: Partial<{ name: string; brand_kit_id: string; asin: string | null; category: string; features: string[]; marketplace: string }>) =>
     fetch(`/api/products/${id}`, { ...j(b), method: "PUT" }).then(json<Product>),
   deleteProduct: (id: string) => fetch(`/api/products/${id}`, { method: "DELETE" }).then(json<{ ok: true }>),
-  async uploadPhoto(productId: string, file: File): Promise<{ key: string; url: string }> {
+  async uploadPhoto(productId: string, file: File, role?: PhotoRole): Promise<{ key: string; url: string; photos: PhotoRef[] }> {
     const fd = new FormData();
     fd.append("file", file);
+    if (role) fd.append("role", role);
     return json(await fetch(`/api/products/${productId}/photos`, { method: "POST", body: fd }));
   },
+  deletePhoto: (productId: string, r2_key: string) =>
+    fetch(`/api/products/${productId}/photos`, { ...j({ r2_key }), method: "DELETE" }).then(json<{ ok: true; photos: PhotoRef[] }>),
+  setPhotoRole: (productId: string, r2_key: string, role: PhotoRole) =>
+    fetch(`/api/products/${productId}/photos`, { ...j({ r2_key, role }), method: "PUT" }).then(json<{ ok: true; photos: PhotoRef[] }>),
 
   // Reviews
   listReviews: (productId: string) => fetch(`/api/products/${productId}/reviews`).then(json<Review[]>),

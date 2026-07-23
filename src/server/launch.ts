@@ -111,10 +111,39 @@ export function productFacts(p: ProductRow): { name: string; category: string; f
   };
 }
 
+// ── Product photos (with roles) ──────────────────────────────────────
+
+export type PhotoRole = "main" | "angle" | "detail";
+export interface PhotoRef {
+  r2_key: string;
+  role: PhotoRole;
+}
+
+/** Parse image_r2_keys, accepting both the legacy string[] and PhotoRef[] shapes. */
+export function parsePhotos(raw: string | null | undefined): PhotoRef[] {
+  const arr = parse<unknown[]>(raw ?? "[]", []);
+  return arr
+    .map((x, i): PhotoRef | null => {
+      if (typeof x === "string") return { r2_key: x, role: i === 0 ? "main" : "angle" };
+      if (x && typeof x === "object" && typeof (x as PhotoRef).r2_key === "string") {
+        const role = (x as PhotoRef).role;
+        return { r2_key: (x as PhotoRef).r2_key, role: role === "angle" || role === "detail" ? role : "main" };
+      }
+      return null;
+    })
+    .filter((x): x is PhotoRef => x !== null);
+}
+
+/** The photo the image stack + tools edit: the `main`-role photo, else the first. */
+export function mainPhoto(p: ProductRow): PhotoRef | null {
+  const photos = parsePhotos(p.image_r2_keys);
+  return photos.find((x) => x.role === "main") ?? photos[0] ?? null;
+}
+
 export async function firstPhotoDataUri(p: ProductRow): Promise<string> {
-  const keys = parse<string[]>(p.image_r2_keys, []);
-  if (keys.length) {
-    const uri = await readUploadAsBase64DataUrl(keys[0]);
+  const photo = mainPhoto(p);
+  if (photo) {
+    const uri = await readUploadAsBase64DataUrl(photo.r2_key);
     if (uri) return uri;
   }
   return PLACEHOLDER_PHOTO;

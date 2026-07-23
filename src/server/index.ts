@@ -1,6 +1,6 @@
 import { createApp, createRoute, z } from "@clawnify/app";
 import { query, get, run } from "./db.js";
-import { initUploads, putUpload, getUpload, rid } from "./uploads.js";
+import { initUploads, putUpload, getUpload, deleteUpload, rid } from "./uploads.js";
 import { TOOLS, getTool, publicTool } from "./tools.js";
 import { editImage, upscaleImage } from "./image.js";
 import { splitReviews, type AiEnv } from "./ai.js";
@@ -14,6 +14,8 @@ import {
   parseReviewsCsv,
   buildTemplateCtx,
   firstPhotoDataUri,
+  parsePhotos,
+  type PhotoRole,
   type BrandKitRow,
   type ProductRow,
   type ReviewRow,
@@ -182,7 +184,8 @@ app.delete("/api/products/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// Upload a product photo → appended to the product's image_r2_keys.
+// Upload a product photo → appended to the product's image_r2_keys with a
+// role (main | angle | detail). The first photo defaults to `main`.
 app.post("/api/products/:id/photos", async (c) => {
   const id = c.req.param("id");
   const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [id]);
@@ -190,12 +193,52 @@ app.post("/api/products/:id/photos", async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
   if (!(file instanceof File)) return c.json({ error: "file is required" }, 400);
+  const roleRaw = form.get("role");
   const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
   const key = `${rid("up")}.${ext}`;
   await putUpload(key, await file.arrayBuffer(), file.type || "image/png");
-  const keys = (JSON.parse(product.image_r2_keys || "[]") as string[]).concat(key);
-  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(keys), id]);
-  return c.json({ key, url: `/api/uploads/${key}`, image_r2_keys: keys }, 201);
+  const photos = parsePhotos(product.image_r2_keys);
+  const role: PhotoRole =
+    roleRaw === "main" || roleRaw === "angle" || roleRaw === "detail" ? roleRaw : photos.length === 0 ? "main" : "angle";
+  photos.push({ r2_key: key, role });
+  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), id]);
+  return c.json({ key, url: `/api/uploads/${key}`, photos }, 201);
+});
+
+// Remove a product photo — drops the entry AND deletes the R2 object.
+app.delete("/api/products/:id/photos", async (c) => {
+  const id = c.req.param("id");
+  const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [id]);
+  if (!product) return c.json({ error: "Not found" }, 404);
+  const b = await c.req.json<{ r2_key?: string }>().catch(() => ({}) as { r2_key?: string });
+  if (!b.r2_key) return c.json({ error: "r2_key is required" }, 400);
+  const photos = parsePhotos(product.image_r2_keys);
+  const remaining = photos.filter((p) => p.r2_key !== b.r2_key);
+  if (remaining.length === photos.length) return c.json({ error: "Photo not found on this product" }, 404);
+  // Keep an addressable hero: if the main photo was removed, promote the first.
+  if (remaining.length && !remaining.some((p) => p.role === "main")) remaining[0].role = "main";
+  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(remaining), id]);
+  await deleteUpload(b.r2_key).catch(() => {});
+  return c.json({ ok: true, photos: remaining });
+});
+
+// Change a photo's role. Setting `main` demotes the previous main to `angle`.
+app.put("/api/products/:id/photos", async (c) => {
+  const id = c.req.param("id");
+  const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [id]);
+  if (!product) return c.json({ error: "Not found" }, 404);
+  const b = await c.req.json<{ r2_key?: string; role?: string }>();
+  if (!b.r2_key || !["main", "angle", "detail"].includes(b.role || "")) {
+    return c.json({ error: "r2_key and role (main|angle|detail) are required" }, 400);
+  }
+  const photos = parsePhotos(product.image_r2_keys);
+  if (!photos.some((p) => p.r2_key === b.r2_key)) return c.json({ error: "Photo not found on this product" }, 404);
+  for (const p of photos) {
+    if (p.r2_key === b.r2_key) p.role = b.role as PhotoRole;
+    else if (b.role === "main" && p.role === "main") p.role = "angle";
+  }
+  await run("UPDATE products SET image_r2_keys=? WHERE id=?", [JSON.stringify(photos), id]);
+  return c.json({ ok: true, photos });
 });
 
 // ── Reviews ──────────────────────────────────────────────────────────

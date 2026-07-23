@@ -57,19 +57,27 @@ export function LaunchDetailView() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [rendering, setRendering] = useState<Set<string>>(new Set());
   const generateFired = useRef(false);
+  const autoRendered = useRef(false);
+  const copyDirty = useRef(false); // user has unsaved edits — polling must not clobber them
 
   const load = useCallback(async () => {
     const l = await api.getLaunch(id);
     setLaunch(l);
     const c = parseJson<ListingCopy | null>(l.listing_copy, null);
-    if (c) setCopy({ ...c, bullets: [...c.bullets, "", "", "", "", ""].slice(0, 5) });
+    if (c && !copyDirty.current) setCopy({ ...c, bullets: [...c.bullets, "", "", "", "", ""].slice(0, 5) });
     return l;
   }, [id]);
+
+  function editCopy(next: ListingCopy) {
+    copyDirty.current = true;
+    setCopy(next);
+  }
 
   // On mount: load; if newly created (`generating`, no copy yet), fire the
   // in-request text generation once, then reload.
   useEffect(() => {
     generateFired.current = false;
+    autoRendered.current = false;
     (async () => {
       const l = await load();
       if (l.status === "generating" && !generateFired.current) {
@@ -79,6 +87,34 @@ export function LaunchDetailView() {
       }
     })();
   }, [id, load]);
+
+  // Live polling: while the launch is generating or any asset is still
+  // pending/rendering, refresh every 3s so the view animates without manual
+  // reloads (the server's stale guard resolves stuck renders).
+  const active =
+    !!launch &&
+    (launch.status === "generating" ||
+      (launch.assets || []).some((a) => a.status === "pending" || a.status === "rendering"));
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => {
+      load().catch(() => {});
+    }, 3000);
+    return () => clearInterval(t);
+  }, [active, load]);
+
+  // The render pattern is client-driven (pending rows + per-asset POST): once
+  // generation lands a fresh, fully-unrendered stack, fire the renders
+  // automatically in parallel — no manual "Render all" needed.
+  useEffect(() => {
+    if (!launch || autoRendered.current) return;
+    const assets = launch.assets || [];
+    if (launch.status === "ready" && assets.length > 0 && assets.every((a) => a.status === "pending")) {
+      autoRendered.current = true;
+      renderAll();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [launch]);
 
   async function saveCopy() {
     setSaving(true);
@@ -148,6 +184,8 @@ export function LaunchDetailView() {
           <PrimaryButton
             busy={generating}
             onClick={async () => {
+              copyDirty.current = false; // regenerated copy replaces local edits
+              autoRendered.current = false;
               await api.generateLaunch(id);
               await load();
             }}
@@ -207,7 +245,7 @@ export function LaunchDetailView() {
               <div className="space-y-4">
                 <Field label="TITLE" meta={counter(copy.title.length, 200)}>
                   <div className="flex gap-1 items-center">
-                    <TextInput value={copy.title} onChange={(e) => setCopy({ ...copy, title: e.target.value })} />
+                    <TextInput value={copy.title} onChange={(e) => editCopy({ ...copy, title: e.target.value })} />
                     <CopyBtn text={copy.title} />
                   </div>
                 </Field>
@@ -217,7 +255,7 @@ export function LaunchDetailView() {
                       <TextArea
                         rows={2}
                         value={b}
-                        onChange={(e) => setCopy({ ...copy, bullets: copy.bullets.map((x, j) => (j === i ? e.target.value : x)) })}
+                        onChange={(e) => editCopy({ ...copy, bullets: copy.bullets.map((x, j) => (j === i ? e.target.value : x)) })}
                       />
                       <CopyBtn text={b} />
                     </div>
@@ -225,13 +263,13 @@ export function LaunchDetailView() {
                 ))}
                 <Field label="DESCRIPTION" meta={counter(copy.description.length, 2000)}>
                   <div className="flex gap-1 items-start">
-                    <TextArea rows={6} value={copy.description} onChange={(e) => setCopy({ ...copy, description: e.target.value })} />
+                    <TextArea rows={6} value={copy.description} onChange={(e) => editCopy({ ...copy, description: e.target.value })} />
                     <CopyBtn text={copy.description} />
                   </div>
                 </Field>
                 <Field label="BACKEND KEYWORDS" meta={counter(bytes(copy.backend_keywords), 249, " bytes")}>
                   <div className="flex gap-1 items-start">
-                    <TextArea rows={2} value={copy.backend_keywords} onChange={(e) => setCopy({ ...copy, backend_keywords: e.target.value })} />
+                    <TextArea rows={2} value={copy.backend_keywords} onChange={(e) => editCopy({ ...copy, backend_keywords: e.target.value })} />
                     <CopyBtn text={copy.backend_keywords} />
                   </div>
                 </Field>
