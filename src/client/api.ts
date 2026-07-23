@@ -6,13 +6,30 @@ export type BrandFonts = { heading?: string; body?: string };
 export type BrandKit = {
   id: string;
   name: string;
-  colors: string; // JSON
+  colors: string; // JSON { primary, secondary, accent, background, palette?: hex[] }
   fonts: string; // JSON
-  tone: string;
+  tone: string; // JSON array of voice chips (legacy: free text)
   notes: string;
   logo_r2_key: string | null;
+  mood_board_r2_keys: string; // JSON array
   created_at: string;
 };
+
+/** Voice chips, tolerating the legacy free-text tone. */
+export function parseTone(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return arr.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+  } catch {
+    /* legacy */
+  }
+  return raw
+    .split(/[,;·]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
 
 export type Product = {
   id: string;
@@ -39,14 +56,62 @@ export type Review = {
   created_at: string;
 };
 
-export type Insight = { point: string; quote: string | null };
+export type Sentiment = "positive" | "negative" | "neutral";
+export type Journey = "pre_purchase" | "post_purchase";
+
+export type ReviewInsight = {
+  insight: string;
+  sentiment: Sentiment;
+  journey: Journey;
+  review_count: number;
+  quotes: string[];
+  reliability: number;
+};
+export type ProductFeature = { feature: string; journey: Journey; source: "reviews" | "listing" | "specs" };
+export type ConversionDriver = { driver: string; kind: "driver" | "blocker"; relevance: number; journey: Journey };
+
 export type LaunchInsights = {
   source: "reviews" | "ai";
-  pains: Insight[];
-  desires: Insight[];
-  objections: Insight[];
-  vocabulary: Insight[];
+  review_insights: ReviewInsight[];
+  product_features: ProductFeature[];
+  conversion_drivers: ConversionDriver[];
 };
+
+/** Parse launch.insights tolerating the legacy {pains,desires,…} shape. */
+export function parseInsights(raw: string | null | undefined): LaunchInsights | null {
+  const d = parseJson<Record<string, unknown> | null>(raw, null);
+  if (!d) return null;
+  if (Array.isArray(d.review_insights)) return d as unknown as LaunchInsights;
+  // Legacy mapping: pains/objections → negative, desires/vocabulary → positive.
+  const legacy = (arr: unknown, sentiment: Sentiment): ReviewInsight[] =>
+    (Array.isArray(arr) ? arr : []).map((x) => {
+      const it = x as { point?: string; quote?: string | null };
+      return {
+        insight: it.point || "",
+        sentiment,
+        journey: "post_purchase" as Journey,
+        review_count: it.quote ? 1 : 0,
+        quotes: it.quote ? [it.quote] : [],
+        reliability: 0,
+      };
+    });
+  return {
+    source: d.source === "ai" ? "ai" : "reviews",
+    review_insights: [
+      ...legacy(d.desires, "positive"),
+      ...legacy(d.pains, "negative"),
+      ...legacy(d.objections, "negative"),
+      ...legacy(d.vocabulary, "neutral"),
+    ].filter((i) => i.insight),
+    product_features: [],
+    conversion_drivers: [],
+  };
+}
+
+export type StepStatus = "pending" | "active" | "done" | "failed";
+export type LaunchStep = { step: string; label: string; status: StepStatus; meta: string[] };
+
+export type LaunchConfig = { image_type: "listing" | "aplus" | "full"; qty: 1 | 2 | 3; format: string };
 
 export type ListingCopy = {
   title: string;
@@ -60,13 +125,17 @@ export type Launch = {
   product_id: string;
   kind: "launch" | "optimize";
   status: "draft" | "generating" | "ready" | "failed" | "exported";
-  insights: string | null; // JSON
+  insights: string | null; // JSON — parse with parseInsights()
   listing_copy: string | null; // JSON
+  steps: string | null; // JSON LaunchStep[]
+  config: string | null; // JSON LaunchConfig
   error: string | null;
   created_at: string;
   updated_at: string;
   assets?: Asset[];
 };
+
+export type AssetQa = { status: "pass" | "fail"; issues: string[]; checked_at: string };
 
 export type Asset = {
   id: string;
@@ -79,6 +148,7 @@ export type Asset = {
   status: "pending" | "rendering" | "done" | "failed";
   r2_key: string | null;
   error: string | null;
+  qa: string | null; // JSON AssetQa
   created_at: string;
 };
 
@@ -159,11 +229,22 @@ export const api = {
 
   // Brand kits
   listBrandKits: () => fetch("/api/brand-kits").then(json<BrandKit[]>),
-  createBrandKit: (b: { name: string; colors: BrandColors; fonts: BrandFonts; tone?: string; notes?: string }) =>
+  createBrandKit: (b: { name: string; colors: BrandColors & { palette?: string[] }; fonts: BrandFonts; tone?: string[]; notes?: string }) =>
     fetch("/api/brand-kits", j(b)).then(json<BrandKit>),
-  updateBrandKit: (id: string, b: Partial<{ name: string; colors: BrandColors; fonts: BrandFonts; tone: string; notes: string }>) =>
-    fetch(`/api/brand-kits/${id}`, { ...j(b), method: "PUT" }).then(json<BrandKit>),
+  updateBrandKit: (
+    id: string,
+    b: Partial<{ name: string; colors: BrandColors & { palette?: string[] }; fonts: BrandFonts; tone: string[]; notes: string }>,
+  ) => fetch(`/api/brand-kits/${id}`, { ...j(b), method: "PUT" }).then(json<BrandKit>),
   deleteBrandKit: (id: string) => fetch(`/api/brand-kits/${id}`, { method: "DELETE" }).then(json<{ ok: true }>),
+  async uploadMoodBoard(kitId: string, file: File): Promise<{ key: string; url: string; mood_board_r2_keys: string[] }> {
+    const fd = new FormData();
+    fd.append("file", file);
+    return json(await fetch(`/api/brand-kits/${kitId}/mood-board`, { method: "POST", body: fd }));
+  },
+  deleteMoodBoard: (kitId: string, r2_key: string) =>
+    fetch(`/api/brand-kits/${kitId}/mood-board`, { ...j({ r2_key }), method: "DELETE" }).then(
+      json<{ ok: true; mood_board_r2_keys: string[] }>,
+    ),
 
   // Products
   listProducts: () => fetch("/api/products").then(json<Product[]>),
@@ -198,7 +279,8 @@ export const api = {
   deleteReview: (id: string) => fetch(`/api/reviews/${id}`, { method: "DELETE" }).then(json<{ ok: true }>),
 
   // Launches
-  createLaunch: (b: { product_id: string; kind?: "launch" | "optimize" }) => fetch("/api/launches", j(b)).then(json<Launch>),
+  createLaunch: (b: { product_id: string; kind?: "launch" | "optimize"; config?: Partial<LaunchConfig> }) =>
+    fetch("/api/launches", j(b)).then(json<Launch>),
   generateLaunch: (id: string) => fetch(`/api/launches/${id}/generate`, { method: "POST" }).then(json<Launch>),
   getLaunch: (id: string) => fetch(`/api/launches/${id}`).then(json<Launch>),
   listLaunches: (productId: string) => fetch(`/api/products/${productId}/launches`).then(json<Launch[]>),
@@ -208,6 +290,7 @@ export const api = {
 
   // Assets
   renderAsset: (id: string) => fetch(`/api/assets/${id}/render`, { method: "POST" }).then(json<Asset>),
+  qaAsset: (id: string) => fetch(`/api/assets/${id}/qa`, { method: "POST" }).then(json<Asset>),
   listProductAssets: (productId: string) => fetch(`/api/products/${productId}/assets`).then(json<Asset[]>),
 
   // Tools

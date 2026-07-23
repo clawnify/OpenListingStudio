@@ -2,7 +2,7 @@
 
 /* Tokens mirror DESIGN.md — the shared Clawnify Apps design system. */
 @theme {
-  --color-background: #f8f9fa;
+  --color-background: #ffffff; /* white canvas by default — cards separate by border */
   --color-surface: #ffffff;
   --color-sunken: #f1f5f9;
   --color-foreground: #1a202c;

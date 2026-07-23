@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import { ArrowLeft, Upload, Rocket, Star, Trash2, FileUp, Globe, ClipboardPaste, X } from "lucide-react";
-import { api, parseJson, parsePhotos, type Product, type BrandKit, type Review, type Launch, type Health, type PhotoRef, type PhotoRole } from "../api";
+import { api, parseJson, parsePhotos, type Product, type BrandKit, type Review, type Launch, type LaunchConfig, type Health, type PhotoRef, type PhotoRole } from "../api";
 import { Card, Zone, Eyebrow, Chip, PrimaryButton, SecondaryButton, Field, TextInput, TextArea, EmptyState, statusBadge } from "../ui";
 
 export function ProductDetailView() {
@@ -17,6 +17,8 @@ export function ProductDetailView() {
   const [liveBusy, setLiveBusy] = useState(false);
   const [csvBusy, setCsvBusy] = useState(false);
   const [launchBusy, setLaunchBusy] = useState(false);
+  const [launchModal, setLaunchModal] = useState<"launch" | "optimize" | null>(null);
+  const [config, setConfig] = useState<LaunchConfig>({ image_type: "full", qty: 3, format: "1:1" });
   const [msg, setMsg] = useState<string | null>(null);
   const [featuresText, setFeaturesText] = useState("");
   const csvRef = useRef<HTMLInputElement>(null);
@@ -118,10 +120,11 @@ export function ProductDetailView() {
     }
   }
 
-  async function startLaunch(kind: "launch" | "optimize") {
+  async function startLaunch() {
+    if (!launchModal) return;
     setLaunchBusy(true);
     try {
-      const l = await api.createLaunch({ product_id: id, kind });
+      const l = await api.createLaunch({ product_id: id, kind: launchModal, config });
       nav(`/launches/${l.id}`);
     } finally {
       setLaunchBusy(false);
@@ -138,7 +141,7 @@ export function ProductDetailView() {
           <h1 className="text-[20px] font-bold tracking-[-0.01em] truncate">{product.name}</h1>
           {product.asin && <Chip>{product.asin}</Chip>}
         </div>
-        <PrimaryButton busy={launchBusy} onClick={() => startLaunch("launch")} title="Run the packaged launch workflow">
+        <PrimaryButton busy={launchBusy} onClick={() => setLaunchModal("launch")} title="Run the packaged launch workflow">
           <Rocket size={14} /> Launch listing
         </PrimaryButton>
       </header>
@@ -230,7 +233,7 @@ export function ProductDetailView() {
             <Zone first>
               <div className="flex items-center justify-between">
                 <Eyebrow>Launches · {launches.length}</Eyebrow>
-                <SecondaryButton busy={launchBusy} onClick={() => startLaunch("optimize")} className="h-8">
+                <SecondaryButton busy={launchBusy} onClick={() => setLaunchModal("optimize")} className="h-8">
                   Optimize existing listing
                 </SecondaryButton>
               </div>
@@ -356,6 +359,100 @@ export function ProductDetailView() {
           </Card>
         </div>
       </div>
+
+      {/* Launch generation config */}
+      {launchModal && (
+        <div className="fixed inset-0 bg-black/30 z-20 flex items-center justify-center p-4" onClick={() => !launchBusy && setLaunchModal(null)}>
+          <div className="bg-surface rounded-xl border border-border w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <Eyebrow>{launchModal === "optimize" ? "Optimize existing listing" : "Launch listing"}</Eyebrow>
+
+            <div className="space-y-4">
+              <div>
+                <label className="text-[12px] font-semibold tracking-[0.04em] text-muted">IMAGE TYPE</label>
+                <div className="mt-1.5 flex gap-1.5">
+                  {(
+                    [
+                      { v: "full", label: "Full stack" },
+                      { v: "listing", label: "Listing" },
+                      { v: "aplus", label: "A+ Content" },
+                    ] as const
+                  ).map((t) => (
+                    <button
+                      key={t.v}
+                      className={`rounded-md border px-3 h-8 text-[13px] font-medium ${
+                        config.image_type === t.v ? "border-primary text-primary bg-primary/5" : "border-border text-muted hover:bg-sunken"
+                      }`}
+                      onClick={() => setConfig({ ...config, image_type: t.v })}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                  <button className="rounded-md border border-border px-3 h-8 text-[13px] text-faint cursor-not-allowed" disabled title="Coming soon">
+                    Ads
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-[12px] font-semibold tracking-[0.04em] text-muted">QTY (FEED IMAGES)</label>
+                  <div className="mt-1.5 flex gap-1.5">
+                    {([1, 2, 3] as const).map((q) => (
+                      <button
+                        key={q}
+                        disabled={config.image_type === "aplus"}
+                        className={`size-8 rounded-md border text-[13px] font-medium tabular-nums disabled:opacity-40 ${
+                          config.qty === q ? "border-primary text-primary bg-primary/5" : "border-border text-muted hover:bg-sunken"
+                        }`}
+                        onClick={() => setConfig({ ...config, qty: q })}
+                      >
+                        {q}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[12px] font-semibold tracking-[0.04em] text-muted">FORMAT</label>
+                  <select
+                    className="mt-1.5 w-full rounded-md border border-border bg-surface px-2.5 h-8 text-[13px]"
+                    value={config.format}
+                    onChange={(e) => setConfig({ ...config, format: e.target.value })}
+                  >
+                    <option value="1:1">Gallery 1:1</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[12px] font-semibold tracking-[0.04em] text-muted">PRODUCT REFERENCES</label>
+                <div className="mt-1.5 flex gap-2">
+                  {(["main", "angle", "detail"] as const).map((role) => {
+                    const p = photos.find((x) => x.role === role);
+                    return (
+                      <div key={role} className="flex-1 text-center">
+                        <div className={`aspect-square rounded-md border ${p ? "border-border" : "border-dashed border-border"} overflow-hidden bg-sunken flex items-center justify-center`}>
+                          {p ? <img src={`/api/uploads/${p.r2_key}`} className="size-full object-cover" /> : <span className="text-[11px] text-faint capitalize">{role}</span>}
+                        </div>
+                        <span className="text-[10px] text-faint capitalize">{role}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="mt-1 text-[11px] text-faint">
+                  {photos.length ? `${Math.min(photos.length, 3)}/3 active — set roles on the photos card.` : "No photos yet — the image stack will use a placeholder."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
+              <SecondaryButton onClick={() => setLaunchModal(null)}>Cancel</SecondaryButton>
+              <PrimaryButton busy={launchBusy} onClick={startLaunch}>
+                <Rocket size={14} /> Generate
+              </PrimaryButton>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

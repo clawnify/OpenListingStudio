@@ -8,11 +8,12 @@
 CREATE TABLE IF NOT EXISTS brand_kits (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL DEFAULT 'Untitled Brand',
-  colors TEXT NOT NULL DEFAULT '{}',   -- JSON { primary, secondary, accent, background }
+  colors TEXT NOT NULL DEFAULT '{}',   -- JSON { primary, secondary, accent, background, palette?: [hex] }
   fonts TEXT NOT NULL DEFAULT '{}',    -- JSON { heading, body } — web-safe or Google fonts
-  tone TEXT NOT NULL DEFAULT '',
+  tone TEXT NOT NULL DEFAULT '[]',     -- JSON array of voice chips, e.g. ["bold","punchy","direct"]
   notes TEXT NOT NULL DEFAULT '',
   logo_r2_key TEXT,
+  mood_board_r2_keys TEXT NOT NULL DEFAULT '[]', -- JSON array of pinned inspiration image keys
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -48,8 +49,10 @@ CREATE TABLE IF NOT EXISTS launches (
   product_id TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'launch',     -- launch | optimize
   status TEXT NOT NULL DEFAULT 'draft',    -- draft | generating | ready | failed | exported
-  insights TEXT,       -- JSON { source, pains[], desires[], objections[], vocabulary[] } with verbatim quotes
+  insights TEXT,       -- JSON { source, review_insights[], product_features[], conversion_drivers[] } — quotes verbatim
   listing_copy TEXT,   -- JSON { title, bullets[5], description, backend_keywords }
+  steps TEXT,          -- JSON [{ step, label, status: pending|active|done|failed, meta: [chips] }] — workflow timeline
+  config TEXT,         -- JSON { image_type: listing|aplus|full, qty: 1-3, format: "1:1" } — generation config
   error TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -68,6 +71,7 @@ CREATE TABLE IF NOT EXISTS assets (
   status TEXT NOT NULL DEFAULT 'pending',  -- pending | rendering | done | failed
   r2_key TEXT,
   error TEXT,
+  qa TEXT,                    -- JSON { status: pass|fail, issues: [..], checked_at } — optional vision QA verdict
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

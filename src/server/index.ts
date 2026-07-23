@@ -2,7 +2,7 @@ import { createApp, createRoute, z } from "@clawnify/app";
 import { query, get, run } from "./db.js";
 import { initUploads, putUpload, getUpload, deleteUpload, rid } from "./uploads.js";
 import { TOOLS, getTool, publicTool } from "./tools.js";
-import { editImage, upscaleImage } from "./image.js";
+import { routeImage, analyzeImage } from "./image.js";
 import { splitReviews, type AiEnv } from "./ai.js";
 import { validateListingCopy, type ListingCopy } from "./amazon-limits.js";
 import { getTemplate, MAIN_IMAGE_TEMPLATE_ID } from "./templates.js";
@@ -11,7 +11,10 @@ import { liveReviewsStatus, findAsin, fetchLiveReviews, type LiveReviewsEnv } fr
 import {
   generateLaunch,
   reapStaleAssets,
+  refreshAssetsStep,
   parseReviewsCsv,
+  parseConfig,
+  initialSteps,
   buildTemplateCtx,
   firstPhotoDataUri,
   parsePhotos,
@@ -71,15 +74,22 @@ app.get("/api/brand-kits", async (c) =>
   c.json(await query<BrandKitRow>("SELECT * FROM brand_kits ORDER BY created_at DESC")),
 );
 
+/** Voice chips arrive as an array; legacy free text is tolerated and split later. */
+function toneField(v: unknown): string {
+  if (Array.isArray(v)) return JSON.stringify(v.filter((x) => typeof x === "string" && x.trim()).slice(0, 12));
+  if (typeof v === "string") return v;
+  return "[]";
+}
+
 app.post("/api/brand-kits", async (c) => {
-  const b = await c.req.json<Partial<BrandKitRow> & { colors?: unknown; fonts?: unknown }>().catch(() => ({}) as Record<string, never>);
+  const b = await c.req.json<Partial<Omit<BrandKitRow, "tone">> & { colors?: unknown; fonts?: unknown; tone?: unknown }>().catch(() => ({}) as Record<string, never>);
   const id = crypto.randomUUID();
   await run("INSERT INTO brand_kits (id, name, colors, fonts, tone, notes) VALUES (?, ?, ?, ?, ?, ?)", [
     id,
     (typeof b.name === "string" && b.name.trim()) || "Untitled Brand",
     JSON.stringify(b.colors ?? {}),
     JSON.stringify(b.fonts ?? {}),
-    typeof b.tone === "string" ? b.tone : "",
+    toneField(b.tone),
     typeof b.notes === "string" ? b.notes : "",
   ]);
   return c.json(await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [id]), 201);
@@ -95,17 +105,45 @@ app.put("/api/brand-kits/:id", async (c) => {
   const id = c.req.param("id");
   const cur = await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [id]);
   if (!cur) return c.json({ error: "Not found" }, 404);
-  const b = await c.req.json<Partial<BrandKitRow> & { colors?: unknown; fonts?: unknown }>();
+  const b = await c.req.json<Partial<Omit<BrandKitRow, "tone">> & { colors?: unknown; fonts?: unknown; tone?: unknown }>();
   await run("UPDATE brand_kits SET name=?, colors=?, fonts=?, tone=?, notes=?, logo_r2_key=? WHERE id=?", [
     typeof b.name === "string" && b.name.trim() ? b.name : cur.name,
     b.colors !== undefined ? JSON.stringify(b.colors) : cur.colors,
     b.fonts !== undefined ? JSON.stringify(b.fonts) : cur.fonts,
-    typeof b.tone === "string" ? b.tone : cur.tone,
+    b.tone !== undefined ? toneField(b.tone) : cur.tone,
     typeof b.notes === "string" ? b.notes : cur.notes,
     b.logo_r2_key !== undefined ? b.logo_r2_key : cur.logo_r2_key,
     id,
   ]);
   return c.json(await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [id]));
+});
+
+// Mood board: pinned inspiration images on the kit.
+app.post("/api/brand-kits/:id/mood-board", async (c) => {
+  const id = c.req.param("id");
+  const kit = await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [id]);
+  if (!kit) return c.json({ error: "Not found" }, 404);
+  const form = await c.req.formData();
+  const file = form.get("file");
+  if (!(file instanceof File)) return c.json({ error: "file is required" }, 400);
+  const ext = (file.name.split(".").pop() || "png").replace(/[^a-z0-9]/gi, "").toLowerCase() || "png";
+  const key = `${rid("mood")}.${ext}`;
+  await putUpload(key, await file.arrayBuffer(), file.type || "image/png");
+  const keys = (JSON.parse(kit.mood_board_r2_keys || "[]") as string[]).concat(key);
+  await run("UPDATE brand_kits SET mood_board_r2_keys=? WHERE id=?", [JSON.stringify(keys), id]);
+  return c.json({ key, url: `/api/uploads/${key}`, mood_board_r2_keys: keys }, 201);
+});
+
+app.delete("/api/brand-kits/:id/mood-board", async (c) => {
+  const id = c.req.param("id");
+  const kit = await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [id]);
+  if (!kit) return c.json({ error: "Not found" }, 404);
+  const b = await c.req.json<{ r2_key?: string }>().catch(() => ({}) as { r2_key?: string });
+  if (!b.r2_key) return c.json({ error: "r2_key is required" }, 400);
+  const keys = (JSON.parse(kit.mood_board_r2_keys || "[]") as string[]).filter((k) => k !== b.r2_key);
+  await run("UPDATE brand_kits SET mood_board_r2_keys=? WHERE id=?", [JSON.stringify(keys), id]);
+  await deleteUpload(b.r2_key).catch(() => {});
+  return c.json({ ok: true, mood_board_r2_keys: keys });
 });
 
 app.delete("/api/brand-kits/:id", async (c) => {
@@ -117,12 +155,24 @@ app.delete("/api/brand-kits/:id", async (c) => {
 
 // ── Products ─────────────────────────────────────────────────────────
 
+/** Bounded pagination params (AGENTS.md: no endpoint returns an unbounded collection). */
+function pageParams(c: { req: { query: (k: string) => string | undefined } }, defLimit = 25, maxLimit = 100) {
+  const limit = Math.min(maxLimit, Math.max(1, parseInt(c.req.query("limit") || "", 10) || defLimit));
+  const offset = Math.max(0, parseInt(c.req.query("offset") || "", 10) || 0);
+  const search = (c.req.query("search") || "").trim();
+  return { limit, offset, search };
+}
+
 app.get("/api/products", async (c) => {
+  const { limit, offset, search } = pageParams(c);
+  const where = search ? "WHERE p.name LIKE ? OR p.asin LIKE ?" : "";
+  const args = search ? [`%${search}%`, `%${search}%`] : [];
   const rows = await query<ProductRow & { review_count: number; launch_count: number }>(
     `SELECT p.*,
        (SELECT COUNT(*) FROM reviews r WHERE r.product_id = p.id) AS review_count,
        (SELECT COUNT(*) FROM launches l WHERE l.product_id = p.id) AS launch_count
-     FROM products p ORDER BY p.created_at DESC`,
+     FROM products p ${where} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+    [...args, limit, offset],
   );
   return c.json(rows);
 });
@@ -243,9 +293,16 @@ app.put("/api/products/:id/photos", async (c) => {
 
 // ── Reviews ──────────────────────────────────────────────────────────
 
-app.get("/api/products/:id/reviews", async (c) =>
-  c.json(await query<ReviewRow>("SELECT * FROM reviews WHERE product_id=? ORDER BY created_at DESC", [c.req.param("id")])),
-);
+app.get("/api/products/:id/reviews", async (c) => {
+  const { limit, offset } = pageParams(c, 50, 200);
+  return c.json(
+    await query<ReviewRow>("SELECT * FROM reviews WHERE product_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?", [
+      c.req.param("id"),
+      limit,
+      offset,
+    ]),
+  );
+});
 
 async function insertReviews(
   productId: string,
@@ -321,23 +378,28 @@ app.delete("/api/reviews/:id", async (c) => {
 
 // ── Launches (the packaged workflow) ─────────────────────────────────
 
-/** Core create: insert the launch in `generating` and return it (202 semantics). */
-async function createLaunch(productId: string, kind: string): Promise<LaunchRow | null> {
+/** Core create: insert the launch in `generating` with its generation config (202 semantics). */
+async function createLaunch(productId: string, kind: string, config?: unknown): Promise<LaunchRow | null> {
   const product = await get<ProductRow>("SELECT * FROM products WHERE id=?", [productId]);
   if (!product) return null;
   const id = crypto.randomUUID();
-  await run("INSERT INTO launches (id, product_id, kind, status) VALUES (?, ?, ?, 'generating')", [
+  const cfg = parseConfig(typeof config === "object" && config ? JSON.stringify(config) : null);
+  await run("INSERT INTO launches (id, product_id, kind, status, config, steps) VALUES (?, ?, ?, 'generating', ?, ?)", [
     id,
     productId,
     kind === "optimize" ? "optimize" : "launch",
+    JSON.stringify(cfg),
+    JSON.stringify(initialSteps()),
   ]);
   return (await get<LaunchRow>("SELECT * FROM launches WHERE id=?", [id]))!;
 }
 
 app.post("/api/launches", async (c) => {
-  const b = await c.req.json<{ product_id?: string; kind?: string }>().catch(() => ({}) as { product_id?: string; kind?: string });
+  const b = await c.req
+    .json<{ product_id?: string; kind?: string; config?: unknown }>()
+    .catch(() => ({}) as { product_id?: string; kind?: string; config?: unknown });
   if (!b.product_id) return c.json({ error: "product_id is required" }, 400);
-  const launch = await createLaunch(b.product_id, b.kind || "launch");
+  const launch = await createLaunch(b.product_id, b.kind || "launch", b.config);
   if (!launch) return c.json({ error: "Product not found" }, 404);
   return c.json(launch, 202);
 });
@@ -410,8 +472,13 @@ async function renderAsset(env: Bindings, asset: AssetRow): Promise<AssetRow> {
       if (!product) throw new Error("Product not found");
       const photo = await firstPhotoDataUri(product);
       if (photo.startsWith("data:image/svg")) throw new Error("Upload a product photo first — the main image edits your real photo");
+      // Angle/detail reference photos ride along so the model sees the product from all sides.
+      const refs = parsePhotos(product.image_r2_keys)
+        .filter((p) => p.role !== "main")
+        .slice(0, 2)
+        .map((p) => `/api/uploads/${p.r2_key}`);
       const tool = getTool("white_background")!;
-      const { url } = await editImage(env, { imageUrl: photo, prompt: tool.buildPrompt({}) });
+      const { url } = await routeImage(env, { op: "edit", imageUrl: photo, prompt: tool.buildPrompt({}), extraImages: refs });
       key = url.replace("/api/uploads/", "");
     } else {
       if (!env.CLAWNIFY_TOKEN) throw new Error("Rendering needs CLAWNIFY_TOKEN (set automatically when deployed on Clawnify)");
@@ -439,6 +506,7 @@ async function renderAsset(env: Bindings, asset: AssetRow): Promise<AssetRow> {
     const msg = e instanceof Error ? e.message : String(e);
     await run("UPDATE assets SET status='failed', error=? WHERE id=?", [msg.slice(0, 1000), asset.id]);
   }
+  if (asset.launch_id) await refreshAssetsStep(asset.launch_id);
   return (await get<AssetRow>("SELECT * FROM assets WHERE id=?", [asset.id]))!;
 }
 
@@ -446,6 +514,60 @@ app.post("/api/assets/:id/render", async (c) => {
   const asset = await get<AssetRow>("SELECT * FROM assets WHERE id=?", [c.req.param("id")]);
   if (!asset) return c.json({ error: "Not found" }, 404);
   return c.json(await renderAsset(c.env, asset));
+});
+
+/**
+ * Optional vision QA (open-slides render→view→fix pattern, one pass): a
+ * vision model checks the rendered asset against the brand kit + expected
+ * slot content and stores a verdict on the row. A `fail` flags the card for
+ * re-render / regeneration — it never blocks anything.
+ */
+app.post("/api/assets/:id/qa", async (c) => {
+  const asset = await get<AssetRow>("SELECT * FROM assets WHERE id=?", [c.req.param("id")]);
+  if (!asset) return c.json({ error: "Not found" }, 404);
+  if (asset.status !== "done" || !asset.r2_key) return c.json({ error: "Asset has no rendered image to check" }, 400);
+
+  let expected = "";
+  if (asset.launch_id) {
+    const launch = await get<LaunchRow>("SELECT * FROM launches WHERE id=?", [asset.launch_id]);
+    const ctx = launch ? await buildTemplateCtx(launch) : null;
+    if (ctx) {
+      expected = [
+        `Product: ${ctx.product.name}`,
+        `Brand: ${ctx.brand.name || "(none)"} — colors ${Object.values(ctx.brand.colors).join(", ")}; heading font ${ctx.brand.fonts.heading}`,
+        ctx.copy ? `Listing title: ${ctx.copy.title}` : "",
+        ctx.copy?.bullets?.length ? `Benefit bullets: ${ctx.copy.bullets.map((b) => b.split(":")[0]).join(" | ")}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+  }
+
+  const verdictRaw = await analyzeImage(c.env, {
+    imageUrls: [`/api/uploads/${asset.r2_key}`],
+    prompt: `You are a strict e-commerce creative QA reviewer. Check this generated listing image (template: ${asset.template_id}, ${asset.width}×${asset.height}).
+
+Expected context:
+${expected || "(none — judge general quality only)"}
+
+Check: (1) all text is legible, correctly spelled, not cut off; (2) the product looks natural, not warped or duplicated; (3) colors/fonts plausibly match the brand system; (4) no invented claims, watermarks, or artifacts; (5) composition works at thumbnail size.
+
+Respond with ONLY a JSON object, no prose, no code fences: { "pass": boolean, "issues": string[] } — issues empty when passing, each issue one short sentence.`,
+  });
+  let verdict: { pass: boolean; issues: string[] };
+  try {
+    const cleaned = verdictRaw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+    const p = JSON.parse(cleaned.slice(cleaned.indexOf("{"), cleaned.lastIndexOf("}") + 1)) as { pass?: unknown; issues?: unknown };
+    verdict = {
+      pass: p.pass === true,
+      issues: Array.isArray(p.issues) ? p.issues.filter((x): x is string => typeof x === "string").slice(0, 6) : [],
+    };
+  } catch {
+    return c.json({ error: "QA model returned an unparseable verdict" }, 502);
+  }
+  const qa = { status: verdict.pass ? "pass" : "fail", issues: verdict.issues, checked_at: new Date().toISOString() };
+  await run("UPDATE assets SET qa=? WHERE id=?", [JSON.stringify(qa), asset.id]);
+  return c.json(await get<AssetRow>("SELECT * FROM assets WHERE id=?", [asset.id]));
 });
 
 // Preview a template asset's compiled HTML (iframe srcdoc === what renders).
@@ -483,10 +605,11 @@ async function runTool(
   );
   try {
     const prompt = tool.buildPrompt(input.params || {});
-    const { url } =
-      tool.id === "upscale" && env.FAL_API_KEY
-        ? await upscaleImage(env, { imageUrl: input.source_image_url })
-        : await editImage(env, { imageUrl: input.source_image_url, prompt });
+    const { url } = await routeImage(env, {
+      op: tool.id === "upscale" ? "upscale" : "edit",
+      imageUrl: input.source_image_url,
+      prompt,
+    });
     await run("UPDATE assets SET status='done', r2_key=? WHERE id=?", [url.replace("/api/uploads/", ""), id]);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -578,6 +701,7 @@ const AssetSchema = z.object({
   status: z.string(),
   r2_key: z.string().nullable(),
   error: z.string().nullable(),
+  qa: z.any().nullable(),
 });
 
 function publicAsset(a: AssetRow) {
@@ -592,6 +716,7 @@ function publicAsset(a: AssetRow) {
     status: a.status,
     r2_key: a.r2_key ? `/api/uploads/${a.r2_key}` : null,
     error: a.error,
+    qa: a.qa ? JSON.parse(a.qa) : null,
   };
 }
 
@@ -638,6 +763,8 @@ const LaunchSchema = z.object({
   status: z.string(),
   insights: z.any().nullable(),
   listing_copy: z.any().nullable(),
+  steps: z.any().nullable(),
+  config: z.any().nullable(),
   error: z.string().nullable(),
   assets: z.array(AssetSchema),
 });
@@ -650,6 +777,8 @@ function publicLaunch(l: LaunchRow, assets: AssetRow[]) {
     status: l.status,
     insights: l.insights ? JSON.parse(l.insights) : null,
     listing_copy: l.listing_copy ? JSON.parse(l.listing_copy) : null,
+    steps: l.steps ? JSON.parse(l.steps) : null,
+    config: l.config ? JSON.parse(l.config) : null,
     error: l.error,
     assets: assets.map(publicAsset),
   };
@@ -718,25 +847,57 @@ const ProductSchema = z.object({
 const listProductsRoute = createRoute({
   method: "get",
   path: "/api/v1/products",
-  summary: "List the product library (with review counts) — pick a product_id for /api/v1/launches or /api/v1/render.",
-  responses: { 200: { content: { "application/json": { schema: z.array(ProductSchema) } }, description: "OK" } },
+  summary:
+    "List the product library (bounded page, with review counts) — pick a product_id for /api/v1/launches or /api/v1/render. Use ?search= to narrow instead of paging through everything.",
+  request: {
+    query: z.object({
+      limit: z.string().optional().openapi({ description: "Page size, default 25, max 100." }),
+      offset: z.string().optional(),
+      search: z.string().optional().openapi({ description: "Filter by product name or ASIN." }),
+    }),
+  },
+  responses: {
+    200: {
+      content: {
+        "application/json": {
+          schema: z.object({
+            items: z.array(ProductSchema),
+            total: z.number(),
+            limit: z.number(),
+            offset: z.number(),
+          }),
+        },
+      },
+      description: "OK",
+    },
+  },
 });
 app.openapi(listProductsRoute, async (c) => {
+  const { limit, offset, search } = pageParams(c);
+  const where = search ? "WHERE p.name LIKE ? OR p.asin LIKE ?" : "";
+  const args = search ? [`%${search}%`, `%${search}%`] : [];
+  const totalRow = await get<{ n: number }>(`SELECT COUNT(*) AS n FROM products p ${where}`, args);
   const rows = await query<ProductRow & { review_count: number }>(
     `SELECT p.*, (SELECT COUNT(*) FROM reviews r WHERE r.product_id = p.id) AS review_count
-     FROM products p ORDER BY p.created_at DESC`,
+     FROM products p ${where} ORDER BY p.created_at DESC LIMIT ? OFFSET ?`,
+    [...args, limit, offset],
   );
   return c.json(
-    rows.map((p) => ({
-      id: p.id,
-      brand_kit_id: p.brand_kit_id,
-      name: p.name,
-      asin: p.asin,
-      marketplace: p.marketplace,
-      category: p.category,
-      features: JSON.parse(p.features || "[]") as string[],
-      review_count: p.review_count,
-    })),
+    {
+      items: rows.map((p) => ({
+        id: p.id,
+        brand_kit_id: p.brand_kit_id,
+        name: p.name,
+        asin: p.asin,
+        marketplace: p.marketplace,
+        category: p.category,
+        features: JSON.parse(p.features || "[]") as string[],
+        review_count: p.review_count,
+      })),
+      total: totalRow?.n ?? rows.length,
+      limit,
+      offset,
+    },
     200,
   );
 });

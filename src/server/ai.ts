@@ -94,49 +94,90 @@ export async function splitReviews(env: AiEnv, raw: string): Promise<SplitReview
     }));
 }
 
-// ── Review insight extraction ────────────────────────────────────────
+// ── Review insight extraction (structured) ───────────────────────────
 
-export interface Insight {
-  point: string;
-  quote: string | null; // verbatim from a stored review, verified server-side
+export type Sentiment = "positive" | "negative" | "neutral";
+export type Journey = "pre_purchase" | "post_purchase";
+
+export interface ReviewInsight {
+  insight: string;
+  sentiment: Sentiment;
+  journey: Journey;
+  /** How many stored reviews contain at least one verified quote — computed server-side. */
+  review_count: number;
+  /** Verbatim excerpts from stored reviews, verified server-side. */
+  quotes: string[];
+  /** Model's confidence the insight holds across the corpus, 0-100. */
+  reliability: number;
+}
+
+export interface ProductFeature {
+  feature: string;
+  journey: Journey;
+  source: "reviews" | "listing" | "specs";
+}
+
+export interface ConversionDriver {
+  driver: string;
+  kind: "driver" | "blocker";
+  /** 1 = most relevant. */
+  relevance: number;
+  journey: Journey;
 }
 
 export interface LaunchInsights {
   source: "reviews" | "ai"; // "reviews" = grounded in real customer text
-  pains: Insight[];
-  desires: Insight[];
-  objections: Insight[];
-  vocabulary: Insight[]; // customer phrases worth reusing in copy
+  review_insights: ReviewInsight[];
+  product_features: ProductFeature[];
+  conversion_drivers: ConversionDriver[];
 }
 
-const INSIGHTS_SYSTEM = `You are a conversion researcher analyzing Amazon customer reviews for a product. Extract the insights a listing copywriter needs.
+const INSIGHTS_SHAPE = `Shape:
+{
+  "review_insights": [{ "insight": string, "sentiment": "positive"|"negative"|"neutral", "journey": "pre_purchase"|"post_purchase", "quotes": [string], "reliability": number }],
+  "product_features": [{ "feature": string, "journey": "pre_purchase"|"post_purchase", "source": "reviews"|"listing"|"specs" }],
+  "conversion_drivers": [{ "driver": string, "kind": "driver"|"blocker", "relevance": number, "journey": "pre_purchase"|"post_purchase" }]
+}
+- "insight"/"driver"/"feature": one concise sentence (<= 90 chars).
+- "journey": pre_purchase = influences the buying decision; post_purchase = shows up after owning it.
+- "reliability": 0-100, your confidence the insight holds across the whole review set.
+- "relevance": rank starting at 1 = most decisive for conversion.
+- 3-6 review_insights, 4-8 product_features, 3-6 conversion_drivers (mix drivers and blockers).`;
+
+const INSIGHTS_SYSTEM = `You are a conversion researcher analyzing Amazon customer reviews for a product. Extract structured insight tables a listing team acts on.
 
 Output rules:
 - Respond with ONLY a JSON object, no prose, no code fences.
-- Shape: { "pains": [{"point": string, "quote": string}], "desires": [...], "objections": [...], "vocabulary": [...] }
-- "point": one concise sentence (<= 120 chars) naming the pain / desire / objection / customer phrase.
-- "quote": a SHORT supporting excerpt (<= 160 chars) COPIED CHARACTER-FOR-CHARACTER from one review — same casing, punctuation, and typos. Never paraphrase, never merge two reviews, never invent. If no review supports the point, omit the point entirely.
-- "pains": problems customers had before/without the product. "desires": outcomes they bought it for. "objections": doubts, complaints, or reasons for returns. "vocabulary": the exact words customers use to describe the product or its use.
-- 2-5 items per category. Quality over quantity — every point must be evidenced.`;
+${INSIGHTS_SHAPE}
+- "quotes": 1-4 SHORT supporting excerpts (<= 160 chars each) COPIED CHARACTER-FOR-CHARACTER from the reviews — same casing, punctuation, and typos. Never paraphrase, never merge two reviews, never invent. An insight with no verbatim quote must be omitted entirely.
+- product_features with source "reviews" must be things customers actually describe; "listing"/"specs" come from the stated facts.`;
 
-const INSIGHTS_AI_SYSTEM = `You are a conversion researcher. No customer reviews exist for this product yet, so infer LIKELY buyer pains, desires, objections, and vocabulary from the product facts and category norms.
+const INSIGHTS_AI_SYSTEM = `You are a conversion researcher. No customer reviews exist for this product yet, so infer LIKELY structured insights from the product facts and category norms.
 
 Output rules:
 - Respond with ONLY a JSON object, no prose, no code fences.
-- Shape: { "pains": [{"point": string}], "desires": [...], "objections": [...], "vocabulary": [...] }
-- "point": one concise sentence (<= 120 chars). Do NOT include quotes — there are no reviews to quote. Never invent customer voice.
-- 2-4 items per category, conservative and category-typical.`;
+${INSIGHTS_SHAPE}
+- "quotes": always an empty array — there are no reviews to quote. Never invent customer voice.
+- "reliability": cap at 50 — these are estimates, not evidence.
+- product_features source must be "listing" or "specs" only.`;
 
 /** Normalize for quote matching: collapse whitespace, strip curly quotes. */
 function norm(s: string): string {
   return s.replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+const asSentiment = (s: unknown): Sentiment => (s === "positive" || s === "negative" ? s : "neutral");
+const asJourney = (s: unknown): Journey => (s === "post_purchase" ? "post_purchase" : "pre_purchase");
+const clamp100 = (n: unknown, cap = 100): number =>
+  typeof n === "number" && Number.isFinite(n) ? Math.max(0, Math.min(cap, Math.round(n))) : 0;
+
 /**
- * Extract insights. With reviews: quotes are verified verbatim against the
- * stored review text (title + body) and dropped if not found — the model can
- * never smuggle an invented customer voice through. Without reviews: the AI
- * fallback tier, clearly labelled, quote-free.
+ * Extract structured insights. With reviews: every quote is verified verbatim
+ * against the stored review text and dropped if not found; an insight keeps
+ * only verified quotes and is dropped when none survive — the model can never
+ * smuggle invented customer voice through. review_count is COMPUTED: the
+ * number of stored reviews containing at least one verified quote. Without
+ * reviews: the AI-estimated tier, clearly labelled, quote-free.
  */
 export async function extractInsights(
   env: AiEnv,
@@ -150,43 +191,67 @@ export async function extractInsights(
     .filter(Boolean)
     .join("\n");
 
-  if (input.reviews.length === 0) {
-    const content = await complete(env, INSIGHTS_AI_SYSTEM, facts);
-    const parsed = parseJson(content) as Partial<Record<"pains" | "desires" | "objections" | "vocabulary", Array<{ point?: string }>>>;
-    const take = (arr?: Array<{ point?: string }>): Insight[] =>
-      (arr || [])
-        .filter((x) => typeof x?.point === "string" && x.point.trim())
-        .map((x) => ({ point: x.point!.trim(), quote: null }));
-    return { source: "ai", pains: take(parsed.pains), desires: take(parsed.desires), objections: take(parsed.objections), vocabulary: take(parsed.vocabulary) };
-  }
-
-  const corpus = input.reviews
-    .map((r, i) => `Review ${i + 1}:${r.title ? ` [${r.title}]` : ""} ${r.body}`)
-    .join("\n---\n")
-    .slice(0, 40000);
-  const haystack = norm(input.reviews.map((r) => `${r.title || ""} ${r.body}`).join(" \n "));
-
-  const content = await complete(env, INSIGHTS_SYSTEM, `${facts}\n\nCustomer reviews:\n${corpus}`);
-  const parsed = parseJson(content) as Partial<Record<"pains" | "desires" | "objections" | "vocabulary", Array<{ point?: string; quote?: string }>>>;
-
-  const verify = (arr?: Array<{ point?: string; quote?: string }>): Insight[] =>
-    (arr || [])
-      .filter((x) => typeof x?.point === "string" && x.point.trim())
-      .map((x) => {
-        const quote = typeof x.quote === "string" ? x.quote.trim() : "";
-        const verbatim = quote.length > 0 && haystack.includes(norm(quote));
-        return { point: x.point!.trim(), quote: verbatim ? quote : null };
-      })
-      // grounded tier: an unevidenced point is dropped, per the system prompt
-      .filter((x) => x.quote !== null);
-
-  return {
-    source: "reviews",
-    pains: verify(parsed.pains),
-    desires: verify(parsed.desires),
-    objections: verify(parsed.objections),
-    vocabulary: verify(parsed.vocabulary),
+  type RawInsights = {
+    review_insights?: Array<{ insight?: string; sentiment?: string; journey?: string; quotes?: unknown[]; reliability?: number }>;
+    product_features?: Array<{ feature?: string; journey?: string; source?: string }>;
+    conversion_drivers?: Array<{ driver?: string; kind?: string; relevance?: number; journey?: string }>;
   };
+
+  const grounded = input.reviews.length > 0;
+  const corpus = grounded
+    ? input.reviews
+        .map((r, i) => `Review ${i + 1}:${r.title ? ` [${r.title}]` : ""} ${r.body}`)
+        .join("\n---\n")
+        .slice(0, 40000)
+    : "";
+  const normalizedReviews = input.reviews.map((r) => norm(`${r.title || ""} ${r.body}`));
+
+  const content = await complete(
+    env,
+    grounded ? INSIGHTS_SYSTEM : INSIGHTS_AI_SYSTEM,
+    grounded ? `${facts}\n\nCustomer reviews:\n${corpus}` : facts,
+  );
+  const parsed = parseJson(content) as RawInsights;
+
+  const review_insights: ReviewInsight[] = (parsed.review_insights || [])
+    .filter((x) => typeof x?.insight === "string" && x.insight.trim())
+    .map((x) => {
+      const quotes = (Array.isArray(x.quotes) ? x.quotes : [])
+        .filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+        .map((q) => q.trim())
+        .filter((q) => normalizedReviews.some((r) => r.includes(norm(q)))); // verbatim only
+      const review_count = normalizedReviews.filter((r) => quotes.some((q) => r.includes(norm(q)))).length;
+      return {
+        insight: x.insight!.trim(),
+        sentiment: asSentiment(x.sentiment),
+        journey: asJourney(x.journey),
+        quotes,
+        review_count,
+        reliability: clamp100(x.reliability, grounded ? 100 : 50),
+      };
+    })
+    // grounded tier: an insight with no surviving verbatim quote is dropped
+    .filter((x) => !grounded || x.quotes.length > 0);
+
+  const product_features: ProductFeature[] = (parsed.product_features || [])
+    .filter((x) => typeof x?.feature === "string" && x.feature.trim())
+    .map((x) => ({
+      feature: x.feature!.trim(),
+      journey: asJourney(x.journey),
+      source: x.source === "reviews" && grounded ? "reviews" : x.source === "specs" ? "specs" : "listing",
+    }));
+
+  const conversion_drivers: ConversionDriver[] = (parsed.conversion_drivers || [])
+    .filter((x) => typeof x?.driver === "string" && x.driver.trim())
+    .map((x, i): ConversionDriver => ({
+      driver: x.driver!.trim(),
+      kind: x.kind === "blocker" ? "blocker" : "driver",
+      relevance: typeof x.relevance === "number" && x.relevance >= 1 ? Math.round(x.relevance) : i + 1,
+      journey: asJourney(x.journey),
+    }))
+    .sort((a, b) => a.relevance - b.relevance);
+
+  return { source: grounded ? "reviews" : "ai", review_insights, product_features, conversion_drivers };
 }
 
 // ── Listing copy generation ──────────────────────────────────────────
@@ -220,8 +285,17 @@ export async function generateListingCopy(
     kind: "launch" | "optimize";
   },
 ): Promise<CopyResult> {
-  const fmtInsight = (label: string, arr: Insight[]) =>
-    arr.length ? `${label}:\n${arr.map((i) => `- ${i.point}${i.quote ? ` (customer: "${i.quote}")` : ""}`).join("\n")}` : "";
+  const ins = input.insights;
+  const fmtReviewInsights = ins.review_insights.length
+    ? `Review insights:\n${ins.review_insights
+        .map((i) => `- [${i.sentiment}/${i.journey}] ${i.insight}${i.quotes.length ? ` (customers: ${i.quotes.map((q) => `"${q}"`).join(" · ")})` : ""}`)
+        .join("\n")}`
+    : "";
+  const fmtDrivers = ins.conversion_drivers.length
+    ? `Conversion drivers/blockers (ranked):\n${ins.conversion_drivers
+        .map((d) => `${d.relevance}. [${d.kind}] ${d.driver}`)
+        .join("\n")}`
+    : "";
 
   const user = [
     `Product: ${input.productName}`,
@@ -231,15 +305,13 @@ export async function generateListingCopy(
       ? `Specs:\n${Object.entries(input.specs).map(([k, v]) => `- ${k}: ${v}`).join("\n")}`
       : "",
     input.brand
-      ? `Brand: ${input.brand.name}${input.brand.tone ? `\nBrand voice/tone: ${input.brand.tone}` : ""}${input.brand.notes ? `\nBrand notes: ${input.brand.notes}` : ""}`
+      ? `Brand: ${input.brand.name}${input.brand.tone ? `\nBrand voice: ${input.brand.tone}` : ""}${input.brand.notes ? `\nBrand notes: ${input.brand.notes}` : ""}`
       : "",
-    input.insights.source === "reviews"
-      ? "Customer insights (from real reviews — ground the copy in these):"
-      : "Estimated buyer insights (no reviews yet — AI-estimated, use as soft guidance):",
-    fmtInsight("Pains", input.insights.pains),
-    fmtInsight("Desires", input.insights.desires),
-    fmtInsight("Objections to answer", input.insights.objections),
-    fmtInsight("Customer vocabulary to reuse", input.insights.vocabulary),
+    ins.source === "reviews"
+      ? "Customer research (from real reviews — ground the copy in these, reuse the customers' own words, answer the blockers):"
+      : "Estimated buyer research (no reviews yet — AI-estimated, use as soft guidance):",
+    fmtReviewInsights,
+    fmtDrivers,
     input.kind === "optimize"
       ? "This is an OPTIMIZE pass on an existing listing: prioritize sharper differentiation and objection handling."
       : "Write the listing copy now.",

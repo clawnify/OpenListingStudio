@@ -18,12 +18,15 @@ export interface BrandStyle {
   name: string;
   colors: { primary: string; secondary: string; accent: string; background: string };
   fonts: { heading: string; body: string };
+  /** Extra brand hexes beyond the four roles (mood-board palette). */
+  palette: string[];
 }
 
 export const DEFAULT_BRAND: BrandStyle = {
   name: "",
   colors: { primary: "#1A202C", secondary: "#475569", accent: "#DD5164", background: "#F8F9FA" },
   fonts: { heading: "Inter", body: "Inter" },
+  palette: [],
 };
 
 export interface TemplateCtx {
@@ -88,12 +91,45 @@ function calloutLines(ctx: TemplateCtx, n: number): string[] {
 function bestQuote(ctx: TemplateCtx): { quote: string; point: string } | null {
   const ins = ctx.insights;
   if (!ins || ins.source !== "reviews") return null;
-  const pools = [ins.desires, ins.vocabulary, ins.pains];
-  for (const pool of pools) {
-    const hit = pool.find((i) => i.quote);
-    if (hit?.quote) return { quote: hit.quote, point: hit.point };
+  // Prefer a positive, well-supported insight's shortest quote.
+  const ranked = [...ins.review_insights].sort(
+    (a, b) => (b.sentiment === "positive" ? 1 : 0) - (a.sentiment === "positive" ? 1 : 0) || b.review_count - a.review_count,
+  );
+  for (const i of ranked) {
+    const q = [...i.quotes].sort((a, b) => a.length - b.length)[0];
+    if (q) return { quote: q, point: i.insight };
   }
   return null;
+}
+
+/**
+ * Benefit pill lines: bullet lead phrases (they're benefit-first), else
+ * features. `skip` lets a template drop the bullet it already used as the
+ * headline so the pill list never repeats it.
+ */
+function benefitPills(ctx: TemplateCtx, n: number, skip = 0): string[] {
+  const bullets = (ctx.copy?.bullets || [])
+    .slice(skip)
+    .map((b) => b.split(":")[0].trim())
+    .filter((b) => b && b.length <= 40);
+  if (bullets.length >= n) return bullets.slice(0, n);
+  return [...bullets, ...ctx.product.features.filter(Boolean)].slice(0, n);
+}
+
+/** Short trust-badge tokens from specs/features (e.g. "BPA-FREE", "32 OZ"). */
+function trustBadges(ctx: TemplateCtx, n: number): string[] {
+  const out: string[] = [];
+  for (const [k, v] of Object.entries(ctx.product.specs)) {
+    const token = `${v}`.length <= 12 ? `${v} ${k}` : k;
+    if (token.length <= 20) out.push(token.toUpperCase());
+  }
+  for (const f of ctx.product.features) {
+    // Split on comma / em-dash / en-dash only — a plain hyphen is usually a
+    // compound word ("food-grade", "BPA-free"), not a clause break.
+    const first = f.split(/[,—–]/)[0].trim();
+    if (first.length <= 22) out.push(first.toUpperCase());
+  }
+  return [...new Set(out)].slice(0, n);
 }
 
 const STAR = `<svg width="34" height="34" viewBox="0 0 24 24" fill="#FFA41C" xmlns="http://www.w3.org/2000/svg"><path d="M12 2l2.9 6.6 7.1.6-5.4 4.7 1.6 7-6.2-3.7-6.2 3.7 1.6-7L2 9.2l7.1-.6L12 2z"/></svg>`;
@@ -103,22 +139,36 @@ const DASH = `<span style="color:#B9C0C9;font-weight:700;font-size:24px;">—</s
 
 // ── Feed templates (1600×1600 listing / social images) ───────────────
 
+// The competitor-grade listing-image archetype: big display headline, benefit
+// pills with icon dots, a trust-badge row, and the product photo composited as
+// the hero — all in the brand kit's system.
 const feedFeatures: TemplateDef = {
   id: "feed_features",
-  name: "Feature Callouts",
+  name: "Benefit Callouts",
   group: "feed",
   size_label: "Feed 1600×1600",
   width: 1600,
   height: 1600,
-  description: "Product photo with brand-styled feature callouts — the workhorse infographic of the image stack.",
+  description: "The workhorse listing infographic: display headline, benefit pills, trust-badge row, product hero.",
   buildHTML(ctx) {
-    const { colors } = ctx.brand;
-    const callouts = calloutLines(ctx, 4);
-    const items = callouts
+    const { colors, palette } = ctx.brand;
+    const pop = palette[0] || colors.accent;
+    const headlineParts = (ctx.copy?.title || ctx.product.name).split(" ");
+    const headline = ctx.copy?.bullets?.[0]?.split(":")[0]?.trim() || headlineParts.slice(0, 5).join(" ");
+    const sub = ctx.copy?.bullets?.[0]?.split(":").slice(1).join(":").trim() || ctx.product.category;
+    const pills = benefitPills(ctx, 3, 1) // bullet 1 is the headline — pills start at bullet 2
       .map(
-        (c) => `<div style="display:flex;align-items:center;gap:22px;background:#fff;border:2px solid ${colors.primary}14;border-radius:20px;padding:26px 32px;box-shadow:0 6px 24px rgba(0,0,0,0.06);">
-          <div style="flex-shrink:0;width:52px;height:52px;border-radius:50%;background:${colors.accent}1A;display:flex;align-items:center;justify-content:center;">${CHECK(colors.accent)}</div>
-          <div style="font-size:34px;font-weight:600;line-height:1.25;color:${colors.primary};">${esc(c)}</div>
+        (p, i) => `<div style="display:flex;align-items:center;gap:20px;background:#FFFFFF;border-radius:999px;padding:20px 34px 20px 20px;box-shadow:0 10px 30px rgba(0,0,0,0.10);width:fit-content;">
+          <div style="flex-shrink:0;width:58px;height:58px;border-radius:50%;background:${i === 1 ? pop : colors.accent};display:flex;align-items:center;justify-content:center;">${CHECK("#FFFFFF")}</div>
+          <div style="font-size:32px;font-weight:700;color:${colors.primary};white-space:nowrap;">${esc(p)}</div>
+        </div>`,
+      )
+      .join("");
+    const badgeList = trustBadges(ctx, 3);
+    const badges = badgeList
+      .map(
+        (b, i) => `<div style="display:flex;align-items:center;gap:10px;${i < badgeList.length - 1 ? `border-right:2px solid ${colors.primary}22;` : ""}padding:0 30px;">
+          ${CHECK(colors.primary)}<span style="font-size:22px;font-weight:700;letter-spacing:0.06em;color:${colors.primary};white-space:nowrap;">${esc(b)}</span>
         </div>`,
       )
       .join("");
@@ -126,16 +176,23 @@ const feedFeatures: TemplateDef = {
       ctx,
       1600,
       1600,
-      `<div style="width:1600px;height:1600px;display:flex;flex-direction:column;padding:90px;">
-        <div>
-          ${ctx.brand.name ? `<div style="font-size:26px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;color:${colors.accent};margin-bottom:18px;">${esc(ctx.brand.name)}</div>` : ""}
-          <div class="heading" style="font-size:72px;font-weight:800;line-height:1.08;max-width:1300px;">${esc(ctx.product.name)}</div>
+      `<div style="width:1600px;height:1600px;display:flex;flex-direction:column;background:
+          radial-gradient(1200px 800px at 110% 110%, ${pop}30, transparent 60%),
+          radial-gradient(1000px 700px at -10% -10%, ${colors.accent}24, transparent 55%),
+          ${colors.background};">
+        <div style="padding:90px 90px 0;">
+          ${ctx.brand.name ? `<div style="font-size:26px;font-weight:800;letter-spacing:0.2em;text-transform:uppercase;color:${colors.accent};margin-bottom:20px;">${esc(ctx.brand.name)}</div>` : ""}
+          <div class="heading" style="font-size:104px;font-weight:800;line-height:0.98;text-transform:uppercase;max-width:1420px;letter-spacing:-0.01em;">${esc(headline)}</div>
+          ${sub ? `<div style="font-size:38px;font-weight:600;color:${colors.secondary};margin-top:26px;max-width:1200px;">${esc(sub)}</div>` : ""}
         </div>
-        <div style="flex:1;display:flex;align-items:center;gap:70px;margin-top:50px;">
-          <div style="flex:1.1;display:flex;align-items:center;justify-content:center;">
-            <img src="${ctx.photoDataUri}" style="max-width:100%;max-height:1000px;object-fit:contain;filter:drop-shadow(0 30px 60px rgba(0,0,0,0.18));"/>
+        <div style="flex:1;display:flex;align-items:center;padding:20px 90px 0;gap:40px;">
+          <div style="display:flex;flex-direction:column;gap:26px;z-index:2;">${pills}</div>
+          <div style="flex:1;display:flex;align-items:center;justify-content:center;">
+            <img src="${ctx.photoDataUri}" style="max-width:100%;max-height:820px;object-fit:contain;filter:drop-shadow(0 40px 70px rgba(0,0,0,0.22));"/>
           </div>
-          <div style="flex:1;display:flex;flex-direction:column;gap:28px;">${items}</div>
+        </div>
+        <div style="height:120px;margin:0 90px 70px;background:#FFFFFF;border-radius:20px;box-shadow:0 10px 30px rgba(0,0,0,0.08);display:flex;align-items:center;justify-content:center;">
+          <div style="display:flex;">${badges}</div>
         </div>
       </div>`,
     );

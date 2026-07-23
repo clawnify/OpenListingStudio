@@ -72,11 +72,12 @@ async function rehost(remoteUrl: string, ext: string, mime: string): Promise<str
  */
 export async function editImage(
   env: ImageEnv,
-  opts: { imageUrl: string; prompt: string; model?: string },
+  opts: { imageUrl: string; prompt: string; model?: string; extraImages?: string[] },
 ): Promise<{ url: string }> {
   if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
   const model = opts.model || DEFAULT_IMAGE_MODEL;
   const inputUrl = await resolveForProvider(opts.imageUrl);
+  const extra = await Promise.all((opts.extraImages || []).map((u) => resolveForProvider(u)));
 
   const body = {
     model,
@@ -85,6 +86,7 @@ export async function editImage(
         role: "user",
         content: [
           { type: "image_url", image_url: { url: inputUrl } },
+          ...extra.map((u) => ({ type: "image_url", image_url: { url: u } })),
           { type: "text", text: opts.prompt },
         ],
       },
@@ -121,6 +123,60 @@ export async function editImage(
     }
   }
   throw lastError || new Error("Image edit failed after retries");
+}
+
+// ── Dispatchers (open-studio pattern: provider routing lives in ONE place) ──
+
+/**
+ * Single image-operation dispatcher shared by the UI tool route, the agent v1
+ * route, and the launch main-image render — so provider branching (fal vs
+ * OpenRouter, key checks, fallbacks) is written exactly once.
+ *   op "edit"    → OpenRouter Gemini image edit (reference images in).
+ *   op "upscale" → fal.ai SeedVR when FAL_API_KEY is set, else a Gemini
+ *                  enhance pass so the tool still works OpenRouter-only.
+ */
+export async function routeImage(
+  env: ImageEnv,
+  params: { op: "edit" | "upscale"; imageUrl: string; prompt: string; model?: string; extraImages?: string[] },
+): Promise<{ url: string }> {
+  if (params.op === "upscale" && env.FAL_API_KEY) {
+    return upscaleImage(env, { imageUrl: params.imageUrl });
+  }
+  if (!env.OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not set — configure it in the app environment");
+  }
+  return editImage(env, { imageUrl: params.imageUrl, prompt: params.prompt, model: params.model, extraImages: params.extraImages });
+}
+
+/**
+ * Vision analyze via OpenRouter (routeAnalyze pattern): images + prompt →
+ * text or JSON. Used by the asset QA pass.
+ */
+export async function analyzeImage(
+  env: ImageEnv & { LISTING_MODEL?: string },
+  params: { prompt: string; imageUrls: string[]; model?: string },
+): Promise<string> {
+  if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
+  const model = params.model || env.LISTING_MODEL || "anthropic/claude-sonnet-4";
+  const content: Array<Record<string, unknown>> = [];
+  for (const u of params.imageUrls) content.push({ type: "image_url", image_url: { url: await resolveForProvider(u) } });
+  content.push({ type: "text", text: params.prompt });
+  const res = await fetchWith5xxRetry("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": "https://clawnify.com",
+      "X-Title": "Open Listing Studio",
+    },
+    body: JSON.stringify({ model, messages: [{ role: "user", content }] }),
+  });
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`OpenRouter ${summarizeUpstreamError(res.status, raw)}`);
+  const data = JSON.parse(raw) as { choices?: Array<{ message?: { content?: string } }> };
+  const text = data.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Vision model returned no content");
+  return text;
 }
 
 /** Upscale via fal.ai SeedVR. Requires FAL_API_KEY. */

@@ -25,10 +25,27 @@ export interface BrandKitRow {
   name: string;
   colors: string;
   fonts: string;
-  tone: string;
+  tone: string; // JSON array of voice chips (legacy: free text)
   notes: string;
   logo_r2_key: string | null;
+  mood_board_r2_keys: string;
   created_at: string;
+}
+
+/** Voice chips, accepting both the chips array and the legacy free-text tone. */
+export function toneChips(kit: BrandKitRow | null): string[] {
+  if (!kit?.tone) return [];
+  try {
+    const arr = JSON.parse(kit.tone);
+    if (Array.isArray(arr)) return arr.filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+  } catch {
+    /* legacy free text */
+  }
+  return kit.tone
+    .split(/[,;·]/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 8);
 }
 
 export interface ProductRow {
@@ -61,9 +78,59 @@ export interface LaunchRow {
   status: string;
   insights: string | null;
   listing_copy: string | null;
+  steps: string | null;
+  config: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ── Generation config + workflow steps ───────────────────────────────
+
+export interface LaunchConfig {
+  image_type: "listing" | "aplus" | "full";
+  qty: 1 | 2 | 3; // number of feed images (listing tier)
+  format: string; // aspect, e.g. "1:1"
+}
+
+export function parseConfig(raw: string | null | undefined): LaunchConfig {
+  const c = parse<Partial<LaunchConfig>>(raw ?? "{}", {});
+  return {
+    image_type: c.image_type === "listing" || c.image_type === "aplus" ? c.image_type : "full",
+    qty: c.qty === 1 || c.qty === 2 ? c.qty : 3,
+    format: typeof c.format === "string" && c.format ? c.format : "1:1",
+  };
+}
+
+export type StepStatus = "pending" | "active" | "done" | "failed";
+export interface LaunchStep {
+  step: string;
+  label: string;
+  status: StepStatus;
+  meta: string[]; // display chips, e.g. "487 reviews", "4.4 rating"
+}
+
+export const LAUNCH_STEPS: Array<{ step: string; label: string }> = [
+  { step: "reading_product_data", label: "Reading product data" },
+  { step: "analyzing_customer_voice", label: "Analyzing customer voice" },
+  { step: "ranking_drivers", label: "Ranking conversion drivers/blockers" },
+  { step: "content_briefs", label: "Content strategy & listing copy" },
+  { step: "generating_assets", label: "Generating assets" },
+];
+
+export function initialSteps(): LaunchStep[] {
+  return LAUNCH_STEPS.map((s, i) => ({ ...s, status: i === 0 ? "active" : "pending", meta: [] }));
+}
+
+/** Persist a step transition so the client's poll animates the timeline. */
+async function setStep(launchId: string, steps: LaunchStep[], step: string, status: StepStatus, meta?: string[]): Promise<void> {
+  const idx = steps.findIndex((s) => s.step === step);
+  if (idx === -1) return;
+  steps[idx] = { ...steps[idx], status, meta: meta ?? steps[idx].meta };
+  if (status === "done" && idx + 1 < steps.length && steps[idx + 1].status === "pending") {
+    steps[idx + 1] = { ...steps[idx + 1], status: "active" };
+  }
+  await run("UPDATE launches SET steps=?, updated_at=datetime('now') WHERE id=?", [JSON.stringify(steps), launchId]);
 }
 
 export interface AssetRow {
@@ -77,6 +144,7 @@ export interface AssetRow {
   status: string;
   r2_key: string | null;
   error: string | null;
+  qa: string | null; // JSON { status: pass|fail, issues: string[], checked_at }
   created_at: string;
 }
 
@@ -93,12 +161,16 @@ function parse<T>(s: string | null | undefined, fallback: T): T {
 
 export function brandStyle(kit: BrandKitRow | null): BrandStyle {
   if (!kit) return DEFAULT_BRAND;
-  const colors = parse<Partial<BrandStyle["colors"]>>(kit.colors, {});
+  const colors = parse<Partial<BrandStyle["colors"]> & { palette?: unknown }>(kit.colors, {});
   const fonts = parse<Partial<BrandStyle["fonts"]>>(kit.fonts, {});
+  const palette = Array.isArray(colors.palette)
+    ? colors.palette.filter((x): x is string => typeof x === "string" && /^#[0-9a-f]{3,8}$/i.test(x))
+    : [];
   return {
     name: kit.name || "",
-    colors: { ...DEFAULT_BRAND.colors, ...colors },
+    colors: { ...DEFAULT_BRAND.colors, primary: colors.primary || DEFAULT_BRAND.colors.primary, secondary: colors.secondary || DEFAULT_BRAND.colors.secondary, accent: colors.accent || DEFAULT_BRAND.colors.accent, background: colors.background || DEFAULT_BRAND.colors.background },
     fonts: { ...DEFAULT_BRAND.fonts, ...fonts },
+    palette,
   };
 }
 
@@ -166,12 +238,21 @@ export async function buildTemplateCtx(launch: LaunchRow): Promise<TemplateCtx |
 
 // ── The generation pipeline ──────────────────────────────────────────
 
-/** The image stack every launch gets: main-image concept + 3 feed + 3 A+ modules. */
-export function launchAssetPlan(): Array<{ template_id: string; size_label: string; width: number; height: number }> {
-  return [
-    { template_id: MAIN_IMAGE_TEMPLATE_ID, size_label: "Main image concept", width: 1600, height: 1600 },
-    ...TEMPLATES.map((t) => ({ template_id: t.id, size_label: t.size_label, width: t.width, height: t.height })),
-  ];
+/**
+ * The image stack a launch gets, shaped by its generation config:
+ *   listing → main-image concept + `qty` feed images
+ *   aplus   → the 3 A+ modules
+ *   full    → everything (the default)
+ */
+export function launchAssetPlan(config: LaunchConfig): Array<{ template_id: string; size_label: string; width: number; height: number }> {
+  const feed = TEMPLATES.filter((t) => t.group === "feed").slice(0, config.qty);
+  const aplus = TEMPLATES.filter((t) => t.group === "aplus");
+  const main = { template_id: MAIN_IMAGE_TEMPLATE_ID, size_label: "Main image concept", width: 1600, height: 1600 };
+  const pick =
+    config.image_type === "listing" ? [main, ...feed] : config.image_type === "aplus" ? [...aplus] : [main, ...feed, ...aplus];
+  return pick.map((t) =>
+    "id" in t ? { template_id: t.id, size_label: t.size_label, width: t.width, height: t.height } : t,
+  );
 }
 
 /**
@@ -188,40 +269,67 @@ export async function generateLaunch(env: AiEnv, launchId: string): Promise<Laun
     ? await get<BrandKitRow>("SELECT * FROM brand_kits WHERE id=?", [product.brand_kit_id])
     : null;
 
-  await run("UPDATE launches SET status='generating', error=NULL, updated_at=datetime('now') WHERE id=?", [launchId]);
+  const steps = initialSteps();
+  await run("UPDATE launches SET status='generating', error=NULL, steps=?, updated_at=datetime('now') WHERE id=?", [
+    JSON.stringify(steps),
+    launchId,
+  ]);
 
   try {
+    // 1. Reading product data
     const facts = productFacts(product);
+    const photos = parsePhotos(product.image_r2_keys);
     const reviews = await query<ReviewRow>(
       "SELECT * FROM reviews WHERE product_id=? ORDER BY created_at DESC LIMIT 200",
       [product.id],
     );
+    await setStep(launchId, steps, "reading_product_data", "done", [
+      `${facts.features.length} features`,
+      `${photos.length} image${photos.length === 1 ? "" : "s"}`,
+    ]);
 
+    // 2. Analyzing customer voice (+ 3. drivers come out of the same research call)
+    const ratings = reviews.map((r) => r.rating).filter((r): r is number => r != null);
+    const avg = ratings.length ? (ratings.reduce((a, b) => a + b, 0) / ratings.length).toFixed(1) : null;
     const insights = await extractInsights(env, {
       productName: facts.name,
       category: facts.category,
       features: facts.features,
       reviews: reviews.map((r) => ({ title: r.title, body: r.body })),
     });
+    await setStep(launchId, steps, "analyzing_customer_voice", "done", [
+      `${reviews.length} review${reviews.length === 1 ? "" : "s"}`,
+      ...(avg ? [`${avg} rating`] : []),
+      ...(insights.source === "ai" ? ["AI-estimated"] : []),
+    ]);
+    const nDrivers = insights.conversion_drivers.filter((d) => d.kind === "driver").length;
+    const nBlockers = insights.conversion_drivers.length - nDrivers;
+    await setStep(launchId, steps, "ranking_drivers", "done", [`${nDrivers} drivers`, `${nBlockers} blockers`]);
+    await run("UPDATE launches SET insights=?, updated_at=datetime('now') WHERE id=?", [JSON.stringify(insights), launchId]);
 
+    // 4. Content strategy & listing copy
     const { copy, enforced } = await generateListingCopy(env, {
       productName: facts.name,
       category: facts.category,
       features: facts.features,
       specs: facts.specs,
-      brand: kit ? { name: kit.name, tone: kit.tone, notes: kit.notes } : null,
+      brand: kit ? { name: kit.name, tone: toneChips(kit).join(", "), notes: kit.notes } : null,
       insights,
       kind: launch.kind === "optimize" ? "optimize" : "launch",
     });
+    await setStep(launchId, steps, "content_briefs", "done", ["title + 5 bullets", "backend keywords"]);
 
-    // Replace any prior asset stack for this launch, then plan the new one.
+    // 5. Plan the image stack (renders are client-driven, per-asset requests).
+    const config = parseConfig(launch.config);
     await run("DELETE FROM assets WHERE launch_id=?", [launchId]);
-    for (const a of launchAssetPlan()) {
+    const plan = launchAssetPlan(config);
+    for (const a of plan) {
       await run(
         "INSERT INTO assets (id, launch_id, product_id, template_id, size_label, width, height, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
         [crypto.randomUUID(), launchId, product.id, a.template_id, a.size_label, a.width, a.height],
       );
     }
+    await setStep(launchId, steps, "generating_assets", "active", [`${plan.length} assets planned`]);
 
     await run(
       "UPDATE launches SET status='ready', insights=?, listing_copy=?, error=?, updated_at=datetime('now') WHERE id=?",
@@ -229,10 +337,34 @@ export async function generateLaunch(env: AiEnv, launchId: string): Promise<Laun
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    const failing = steps.find((s) => s.status === "active");
+    if (failing) await setStep(launchId, steps, failing.step, "failed");
     await run("UPDATE launches SET status='failed', error=?, updated_at=datetime('now') WHERE id=?", [msg.slice(0, 1000), launchId]);
   }
 
   return (await get<LaunchRow>("SELECT * FROM launches WHERE id=?", [launchId]))!;
+}
+
+/**
+ * Called after an asset render resolves: when nothing is left pending or
+ * rendering for the launch, flip the `generating_assets` step to done.
+ */
+export async function refreshAssetsStep(launchId: string): Promise<void> {
+  const launch = await get<LaunchRow>("SELECT * FROM launches WHERE id=?", [launchId]);
+  if (!launch?.steps) return;
+  const assets = await query<AssetRow>("SELECT status FROM assets WHERE launch_id=?", [launchId]);
+  if (!assets.length || assets.some((a) => a.status === "pending" || a.status === "rendering")) return;
+  const steps = parse<LaunchStep[]>(launch.steps, []);
+  const idx = steps.findIndex((s) => s.step === "generating_assets");
+  if (idx === -1 || steps[idx].status === "done") return;
+  const done = assets.filter((a) => a.status === "done").length;
+  const failed = assets.length - done;
+  steps[idx] = {
+    ...steps[idx],
+    status: failed && !done ? "failed" : "done",
+    meta: [`${done} rendered`, ...(failed ? [`${failed} failed`] : [])],
+  };
+  await run("UPDATE launches SET steps=?, updated_at=datetime('now') WHERE id=?", [JSON.stringify(steps), launchId]);
 }
 
 /** Stale guard: assets stuck `rendering` for >5 minutes flip to `failed`. */
