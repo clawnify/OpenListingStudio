@@ -4,7 +4,7 @@
 
 # OpenListingStudio
 
-[![Deploy with Clawnify](https://app.clawnify.com/deploy-button.svg)](https://app.clawnify.com/deploy?repo=clawnify/open-listing-studio)
+[![Deploy with Clawnify](https://app.clawnify.com/deploy-button.svg)](https://app.clawnify.com/deploy?repo=clawnify/OpenListingStudio)
 
 **The open-source AI listing studio for e-commerce sellers.** Brand kits, a product library with review ingestion, and a review-grounded **Launch** workflow that generates Amazon-compliant listing copy, a branded product image stack, and A+ content modules — plus directed-edit image tools for product photos. Amazon-first, agent-native, and **BYOK**: it runs on your own model keys, with no credits, no seats, and no lock-in. An open-source alternative to credit-based listing SaaS like Scalable — provided by [Clawnify.com](https://clawnify.com).
 
