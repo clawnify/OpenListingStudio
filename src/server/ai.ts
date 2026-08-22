@@ -28,7 +28,7 @@ async function complete(env: AiEnv, system: string, user: string): Promise<strin
       Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://clawnify.com",
-      "X-Title": "Open Listing Studio",
+      "X-Title": "OpenListingStudio",
     },
     body: JSON.stringify({
       model: env.LISTING_MODEL || DEFAULT_TEXT_MODEL,

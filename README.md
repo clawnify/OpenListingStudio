@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="readme-banner.png" alt="Open Listing Studio" width="840" />
+  <img src="readme-banner.png" alt="OpenListingStudio" width="840" />
 </p>
 
-# Open Listing Studio
+# OpenListingStudio
 
 [![Deploy with Clawnify](https://app.clawnify.com/deploy-button.svg)](https://app.clawnify.com/deploy?repo=clawnify/open-listing-studio)
 

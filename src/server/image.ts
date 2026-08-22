@@ -104,7 +104,7 @@ export async function editImage(
           Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://clawnify.com",
-          "X-Title": "Open Listing Studio",
+          "X-Title": "OpenListingStudio",
         },
         body: JSON.stringify(body),
       });
@@ -213,7 +213,7 @@ export async function analyzeImage(
       Authorization: `Bearer ${env.OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://clawnify.com",
-      "X-Title": "Open Listing Studio",
+      "X-Title": "OpenListingStudio",
     },
     body: JSON.stringify({ model, messages: [{ role: "user", content }] }),
   });

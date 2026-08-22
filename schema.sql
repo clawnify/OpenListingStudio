@@ -1,4 +1,4 @@
--- Open Listing Studio — canonical schema.
+-- OpenListingStudio — canonical schema.
 -- Brand kits set the voice + visual system; products carry the catalog facts;
 -- reviews are the raw customer evidence; a LAUNCH is the first-class object —
 -- one packaged workflow run (insights → listing copy → image stack) with a

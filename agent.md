@@ -1,4 +1,4 @@
-# Open Listing Studio — agent guide
+# OpenListingStudio — agent guide
 
 AI listing-content studio for e-commerce sellers (Amazon-first). Brand kits + product library + review-grounded Launch workflow (insights → compliant listing copy → branded image stack + A+ modules) + directed-edit image tools.
 

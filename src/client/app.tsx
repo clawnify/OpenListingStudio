@@ -43,7 +43,7 @@ export function App() {
             ))}
           </nav>
           <div className="mt-auto p-4 text-[11px] text-faint leading-relaxed">
-            Open Listing Studio
+            OpenListingStudio
             <br />
             BYOK · open source
           </div>

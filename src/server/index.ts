@@ -39,7 +39,7 @@ type Bindings = {
 type Env = { Bindings: Bindings };
 
 const app = createApp<Env>({
-  title: "Open Listing Studio API",
+  title: "OpenListingStudio API",
   version: "1.0.0",
   description:
     "AI listing-content studio: brand kits, product library with review ingestion, review-grounded launch workflow (listing copy + image stack + A+ modules), and directed-edit image tools.",
