@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { AppNav, embedded, reportLocation, type AppNavGroup } from "@clawnify/app/client";
 import { Package, Palette, Wand2, Store } from "lucide-react";
 import { BrandKitsView } from "./views/brand-kits";
 import { ProductsView } from "./views/products";
@@ -12,11 +14,46 @@ const NAV = [
   { to: "/tools", label: "Image tools", icon: Wand2, end: false },
 ];
 
+// Inside the Clawnify workspace the host draws this navigation in its own
+// sidebar; the app reports its route so a reload reopens the same screen.
+const HOST_NAV: AppNavGroup[] = [
+  {
+    items: [
+      { id: "products", label: "Products", icon: "package", href: "/", home: true },
+      { id: "brands", label: "Brand kits", icon: "layers", href: "/brands" },
+      { id: "tools", label: "Image tools", icon: "image", href: "/tools" },
+    ],
+  },
+];
+
+function activeNavId(pathname: string): string {
+  if (pathname.startsWith("/brands")) return "brands";
+  if (pathname.startsWith("/tools")) return "tools";
+  return "products";
+}
+
+function HostNav() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    reportLocation(location.pathname + location.search);
+  }, [location.pathname, location.search]);
+  return (
+    <AppNav
+      title="Listing Studio"
+      icon="package"
+      groups={HOST_NAV}
+      active={activeNavId(location.pathname)}
+      onNavigate={(item) => item.href && navigate(item.href)}
+    />
+  );
+}
+
 export function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen flex">
-        {/* Sidebar */}
+        {embedded ? <HostNav /> : (
         <aside className="w-[220px] shrink-0 border-r border-border bg-surface flex flex-col">
           <div className="h-14 px-4 flex items-center gap-2 border-b border-border">
             <div className="size-7 rounded-lg bg-foreground flex items-center justify-center">
@@ -48,6 +85,7 @@ export function App() {
             BYOK · open source
           </div>
         </aside>
+        )}
 
         {/* Content */}
         <main className="flex-1 min-w-0">
