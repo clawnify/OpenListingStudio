@@ -28,6 +28,7 @@ import {
   type Asset,
   type AssetQa,
   type Product,
+  type Health,
 } from "../api";
 import { Card, Zone, Eyebrow, Chip, Badge, PrimaryButton, SecondaryButton, Field, TextInput, TextArea, statusBadge, counter } from "../ui";
 
@@ -312,6 +313,7 @@ export function LaunchDetailView() {
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [rendering, setRendering] = useState<Set<string>>(new Set());
   const [qaBusy, setQaBusy] = useState<Set<string>>(new Set());
+  const [health, setHealth] = useState<Health | null>(null);
   const generateFired = useRef(false);
   const autoRendered = useRef(false);
   const copyDirty = useRef(false); // user has unsaved edits — polling must not clobber them
@@ -337,6 +339,7 @@ export function LaunchDetailView() {
     (async () => {
       const l = await load();
       api.getProduct(l.product_id).then(setProduct).catch(() => {});
+      api.health().then(setHealth).catch(() => {});
       if (l.status === "generating" && !generateFired.current) {
         generateFired.current = true;
         await api.generateLaunch(id).catch(() => {});
@@ -432,6 +435,7 @@ export function LaunchDetailView() {
   const assets = launch.assets || [];
   const doneCount = assets.filter((a) => a.status === "done").length;
   const generating = launch.status === "generating";
+  const noModelKey = health !== null && !health.openrouter;
   const fullText = [
     `TITLE\n${copy.title}`,
     `BULLETS\n${copy.bullets.map((b) => `• ${b}`).join("\n")}`,
@@ -462,15 +466,16 @@ export function LaunchDetailView() {
           )}
           <PrimaryButton
             busy={generating}
+            disabled={noModelKey}
             onClick={async () => {
               copyDirty.current = false; // regenerated copy replaces local edits
               autoRendered.current = false;
               await api.generateLaunch(id);
               await load();
             }}
-            title="Re-run insights + copy generation"
+            title={noModelKey ? "Requires OPENROUTER_API_KEY — set it in the app environment" : "Re-run insights + copy generation"}
           >
-            <RefreshCw size={14} /> {generating ? "Generating…" : "Regenerate"}
+            <RefreshCw size={14} /> {generating ? "Generating…" : noModelKey ? "Regenerate (needs key)" : "Regenerate"}
           </PrimaryButton>
         </div>
       </header>
@@ -577,7 +582,11 @@ export function LaunchDetailView() {
                 </div>
               </div>
               {assets.length === 0 ? (
-                <p className="text-[13px] text-muted">The image stack is planned during generation — regenerate to create it.</p>
+                <p className="text-[13px] text-muted">
+                  {noModelKey
+                    ? "The image stack is planned during generation, which needs a model key."
+                    : "The image stack is planned during generation — regenerate to create it."}
+                </p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 mt-1">
                   {assets.map((a) => {

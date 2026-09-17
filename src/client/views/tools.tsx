@@ -221,13 +221,22 @@ export function ToolsView() {
               <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-faint">{CATEGORY_LABEL[cat]}</div>
               {items.map((tool) => {
                 const Icon = ICONS[tool.icon] ?? Sparkles;
+                // FAL-only tools need FAL_API_KEY; every other edit runs on the OpenRouter image model.
                 const needsFal = !!tool.requiresFal && health !== null && !health.fal;
+                const needsModel = !tool.requiresFal && health !== null && !health.openrouter;
+                const needsKey = needsFal || needsModel;
                 return (
                   <button
                     key={tool.id}
-                    disabled={!selected || needsFal}
+                    disabled={!selected || needsKey}
                     onClick={() => openTool(tool)}
-                    title={needsFal ? "Requires FAL_API_KEY — set it in the app environment" : tool.description}
+                    title={
+                      needsFal
+                        ? "Requires FAL_API_KEY — set it in the app environment"
+                        : needsModel
+                          ? "Requires OPENROUTER_API_KEY — set it in the app environment"
+                          : tool.description
+                    }
                     className="w-full flex items-start gap-2.5 rounded-lg px-2 py-2 text-left hover:bg-sunken disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <Icon size={18} className="text-primary mt-0.5 shrink-0" />
@@ -235,6 +244,7 @@ export function ToolsView() {
                       <span className="block text-sm font-medium">
                         {tool.label}
                         {needsFal && <span className="ml-1.5 text-[10px] text-faint font-normal">needs FAL key</span>}
+                        {needsModel && <span className="ml-1.5 text-[10px] text-faint font-normal">needs model key</span>}
                       </span>
                       <span className="block text-[11px] text-muted line-clamp-1">{tool.description}</span>
                     </span>

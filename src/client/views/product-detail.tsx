@@ -152,6 +152,8 @@ export function ProductDetailView() {
     }
   }
 
+  const noModelKey = health !== null && !health.openrouter;
+
   async function startLaunch() {
     if (!launchModal) return;
     setLaunchBusy(true);
@@ -173,8 +175,13 @@ export function ProductDetailView() {
           <h1 className="text-[20px] font-bold tracking-[-0.01em] truncate">{product.name}</h1>
           {product.asin && <Chip>{product.asin}</Chip>}
         </div>
-        <PrimaryButton busy={launchBusy} onClick={() => setLaunchModal("launch")} title="Run the packaged launch workflow">
-          <Rocket size={14} /> Launch listing
+        <PrimaryButton
+          busy={launchBusy}
+          disabled={noModelKey}
+          onClick={() => setLaunchModal("launch")}
+          title={noModelKey ? "Requires OPENROUTER_API_KEY — set it in the app environment" : "Run the packaged launch workflow"}
+        >
+          <Rocket size={14} /> Launch listing{noModelKey ? " (needs key)" : ""}
         </PrimaryButton>
       </header>
 
@@ -265,8 +272,14 @@ export function ProductDetailView() {
             <Zone first>
               <div className="flex items-center justify-between">
                 <Eyebrow>Launches · {launches.length}</Eyebrow>
-                <SecondaryButton busy={launchBusy} onClick={() => setLaunchModal("optimize")} className="h-8">
-                  Optimize existing listing
+                <SecondaryButton
+                  busy={launchBusy}
+                  disabled={noModelKey}
+                  onClick={() => setLaunchModal("optimize")}
+                  className="h-8"
+                  title={noModelKey ? "Requires OPENROUTER_API_KEY — set it in the app environment" : undefined}
+                >
+                  Optimize existing listing{noModelKey ? " (needs key)" : ""}
                 </SecondaryButton>
               </div>
               {launches.length === 0 ? (
