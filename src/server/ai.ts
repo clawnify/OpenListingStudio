@@ -12,7 +12,7 @@
 
 import { LIMITS, type ListingCopy, validateListingCopy, enforceListingCopy } from "./amazon-limits.js";
 
-export const DEFAULT_TEXT_MODEL = "anthropic/claude-sonnet-4";
+export const DEFAULT_TEXT_MODEL = "~anthropic/claude-sonnet-latest";
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 export type AiEnv = {

@@ -36,7 +36,7 @@ The tool registry is a single source of truth: the same definitions power the UI
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `OPENROUTER_API_KEY` | ✅ | Copy + insight generation (default `anthropic/claude-sonnet-4`, override with `LISTING_MODEL`) and Gemini image edits |
+| `OPENROUTER_API_KEY` | ✅ | Copy + insight generation (default `~anthropic/claude-sonnet-latest`, the newest Claude Sonnet; override with `LISTING_MODEL`) and Gemini image edits |
 | `FAL_API_KEY` | optional | fal.ai: true upscaling (SeedVR), background removal + template cutout compositing (BiRefNet) |
 | `SERPAPI_API_KEY` | optional | Live Amazon review import (SerpAPI Amazon engines) |
 

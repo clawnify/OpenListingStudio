@@ -16,5 +16,5 @@ OPENROUTER_API_KEY=
 # Clawnify; only needed locally if you want live PNG renders.
 # CLAWNIFY_TOKEN=
 
-# Optional — override the text model (default anthropic/claude-sonnet-4)
+# Optional — override the text model (default ~anthropic/claude-sonnet-latest, the newest Claude Sonnet)
 # LISTING_MODEL=
