@@ -9,6 +9,7 @@
  * Every result is re-hosted in R2 so URLs are stable and same-origin.
  */
 import { putUpload, readUploadAsBase64DataUrl, rid } from "./uploads.js";
+import { DEFAULT_TEXT_MODEL } from "./ai.js";
 
 export type ImageEnv = {
   OPENROUTER_API_KEY: string;
@@ -203,7 +204,7 @@ export async function analyzeImage(
   params: { prompt: string; imageUrls: string[]; model?: string },
 ): Promise<string> {
   if (!env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not set");
-  const model = params.model || env.LISTING_MODEL || "anthropic/claude-sonnet-4";
+  const model = params.model || env.LISTING_MODEL || DEFAULT_TEXT_MODEL;
   const content: Array<Record<string, unknown>> = [];
   for (const u of params.imageUrls) content.push({ type: "image_url", image_url: { url: await resolveForProvider(u) } });
   content.push({ type: "text", text: params.prompt });
