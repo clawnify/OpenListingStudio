@@ -1,6 +1,6 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { BrowserRouter, Routes, Route, NavLink, useLocation, useNavigate } from "react-router-dom";
-import { AppNav, embedded, reportLocation, type AppNavGroup } from "@clawnify/app/client";
+import { AppNav, reportLocation, type AppNavGroup } from "@clawnify/app/client";
 import { Package, Palette, Wand2, Store } from "lucide-react";
 import { BrandKitsView } from "./views/brand-kits";
 import { ProductsView } from "./views/products";
@@ -15,7 +15,8 @@ const NAV = [
 ];
 
 // Inside the Clawnify workspace the host draws this navigation in its own
-// sidebar; the app reports its route so a reload reopens the same screen.
+// sidebar; anywhere else the app's own sidebar below is drawn from it. The app
+// reports its route so a reload reopens the same screen.
 const HOST_NAV: AppNavGroup[] = [
   {
     items: [
@@ -45,7 +46,45 @@ function HostNav() {
       groups={HOST_NAV}
       active={activeNavId(location.pathname)}
       onNavigate={(item) => item.href && navigate(item.href)}
+      standalone={(nav) => <Sidebar card={nav.card} />}
     />
+  );
+}
+
+function Sidebar({ card }: { card: ReactNode }) {
+  return (
+    <aside className="w-[220px] shrink-0 border-r border-border bg-surface flex flex-col">
+      <div className="h-14 px-4 flex items-center gap-2 border-b border-border">
+        <div className="size-7 rounded-lg bg-foreground flex items-center justify-center">
+          <Store size={15} className="text-background" />
+        </div>
+        <span className="font-semibold text-sm">Listing Studio</span>
+      </div>
+      <nav className="p-3">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted px-2 py-2">Studio</div>
+        {NAV.map(({ to, label, icon: Icon, end }) => (
+          <NavLink
+            key={to}
+            to={to}
+            end={end}
+            className={({ isActive }) =>
+              `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] mb-0.5 ${
+                isActive ? "bg-sunken text-foreground font-semibold" : "text-muted hover:bg-sunken"
+              }`
+            }
+          >
+            <Icon size={15} />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+      {card && <div className="mt-auto px-3 pb-3">{card}</div>}
+      <div className="mt-auto p-4 text-[11px] text-faint leading-relaxed">
+        OpenListingStudio
+        <br />
+        BYOK · open source
+      </div>
+    </aside>
   );
 }
 
@@ -53,39 +92,7 @@ export function App() {
   return (
     <BrowserRouter>
       <div className="min-h-screen flex">
-        {embedded ? <HostNav /> : (
-        <aside className="w-[220px] shrink-0 border-r border-border bg-surface flex flex-col">
-          <div className="h-14 px-4 flex items-center gap-2 border-b border-border">
-            <div className="size-7 rounded-lg bg-foreground flex items-center justify-center">
-              <Store size={15} className="text-background" />
-            </div>
-            <span className="font-semibold text-sm">Listing Studio</span>
-          </div>
-          <nav className="p-3">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted px-2 py-2">Studio</div>
-            {NAV.map(({ to, label, icon: Icon, end }) => (
-              <NavLink
-                key={to}
-                to={to}
-                end={end}
-                className={({ isActive }) =>
-                  `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] mb-0.5 ${
-                    isActive ? "bg-sunken text-foreground font-semibold" : "text-muted hover:bg-sunken"
-                  }`
-                }
-              >
-                <Icon size={15} />
-                {label}
-              </NavLink>
-            ))}
-          </nav>
-          <div className="mt-auto p-4 text-[11px] text-faint leading-relaxed">
-            OpenListingStudio
-            <br />
-            BYOK · open source
-          </div>
-        </aside>
-        )}
+        <HostNav />
 
         {/* Content */}
         <main className="flex-1 min-w-0">
